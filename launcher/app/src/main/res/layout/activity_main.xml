@@ -148,9 +148,10 @@
                 <TextView
                     android:id="@+id/btnWifi"
                     style="@style/TopButton"
-                    android:maxWidth="160dp"
+                    android:maxWidth="200dp"
                     android:text="@string/network"
                     android:drawableStart="@drawable/ic_wifi"
+                    android:drawableTint="@null"
                     android:nextFocusDown="@+id/grid" />
 
                 <TextView
@@ -161,23 +162,25 @@
                     android:nextFocusDown="@+id/grid" />
                 </LinearLayout>
 
-                <TextView
-                    android:id="@+id/networkStatus"
-                    style="@style/TextOutfit.Weight400"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_gravity="end"
-                    android:maxWidth="380dp"
-                    android:layout_marginTop="8dp"
-                    android:layout_marginEnd="4dp"
-                    android:gravity="end"
-                    android:text="@string/network_connecting"
-                    android:textColor="#B3FFFFFF"
-                    android:textSize="12sp"
-                    android:singleLine="true"
-                    android:ellipsize="end" />
             </LinearLayout>
         </RelativeLayout>
+
+        <TextView
+            android:id="@+id/appOptionsHint"
+            style="@style/TextOutfit.Weight400"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="12dp"
+            android:layout_marginTop="6dp"
+            android:layout_marginBottom="6dp"
+            android:text="@string/move_instructions"
+            android:textColor="#B3FFFFFF"
+            android:textSize="12sp"
+            android:singleLine="true"
+            android:ellipsize="end"
+            android:visibility="gone"
+            android:importantForAccessibility="no" />
 
         <!-- The wrapper clips at the grid's edge; the grid itself must not clip so scaled tiles can overflow their cells. -->
         <FrameLayout
@@ -199,23 +202,6 @@
                 android:descendantFocusability="afterDescendants" />
         </FrameLayout>
     </LinearLayout>
-
-    <TextView
-        android:id="@+id/btnAllApps"
-        style="@style/TopButton"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom|center_horizontal"
-        android:layout_marginStart="0dp"
-        android:layout_marginBottom="12dp"
-        android:minHeight="32dp"
-        android:paddingStart="14dp"
-        android:paddingEnd="14dp"
-        android:paddingTop="6dp"
-        android:paddingBottom="6dp"
-        android:text="@string/all_apps"
-        android:textSize="12sp"
-        android:drawableEnd="@drawable/ic_expand_more" />
 
     <!-- The single floating glass highlight that springs between tiles. -->
     <com.gathin.tvhome.GlassView

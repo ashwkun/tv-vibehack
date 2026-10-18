@@ -8,20 +8,73 @@ glass focus highlight. This fork develops selected improvements from
 |---|---|
 | ![Stock Google TV home with a sponsored ad](docs/stock-home.jpg) | ![tvOS-style launcher](docs/new-home.jpg) |
 
-The launcher has no Internet permission, downloads or background services. Device package changes
-are separate from the app and require a backup and a reviewed device-specific list.
+The launcher has no Internet permission, downloads or background services. Its Uninstall action opens
+Android's confirmation screen. System debloating over ADB remains a separate task requiring a backup
+and a reviewed device-specific list.
 
 ## Development scope
 
 Phase 1 focuses on app identity and focus restoration, accurate Network status, cancelling stale
-hero-title animations, accessibility, and safer build/install tooling. The Network button keeps a
-fixed label and reports connection status without reading the Wi-Fi name or requesting location.
+hero-title animations, accessibility, and safer build/install tooling. A compact network pill shows
+the current Wi-Fi name when Android permits it, with a connection icon and a green, amber or gray
+status indicator. Ethernet, Offline, No Internet, Sign-in needed and Checking states have short labels;
+full status remains available to accessibility services. If Android hides the Wi-Fi name, the pill
+falls back to Wi-Fi and still reports connection status. Green means internet access is validated,
+amber means checking or attention is needed, and gray means offline.
 See [development notes and upstream credits](docs/development.md) for scope and validation status.
 
-Remote dock editing and an installed-app library from upstream
-[PR #19](https://github.com/Gathin23/tv-vibehack/pull/19) are planned separately. The current dock and
-hidden apps remain configurable in
-[`config.xml`](launcher/app/src/main/res/values/config.xml); changing these defaults requires a rebuild.
+Hold **OK** on the network pill and choose **Show Wi-Fi name** to enable name access. Android protects
+the name with location permission and the TV's Location setting. Home explains this before requesting
+permission; it does not prompt at startup or turn on Location itself. The name lookup reads the current
+Wi-Fi connection, without Wi-Fi scans, coordinate lookup or polling. Denying permission leaves the
+network shortcut usable. The installer grants no runtime permissions.
+
+Phase 2 adds remote dock editing and an installed-app library, adapted from upstream
+[PR #19](https://github.com/Gathin23/tv-vibehack/pull/19), with separate identities for apps, empty slots,
+unavailable pins and the library entry. Build/model checks and hardware validation are recorded
+separately in the development notes.
+
+The dock keeps its original position near the bottom of Home. Use **Down** to reach **Recent apps**,
+then **All apps**. Recent apps appears only when there are enough eligible apps to fill one row
+(four with the default column count); otherwise All apps follows the dock directly. It records
+successful opens from this launcher's app tiles or library, excluding dock apps, hidden shortcuts and
+unavailable apps. It keeps up to 20 distinct entries privately in most-recently-opened order, with no
+date or time cutoff. It does not observe apps opened elsewhere or request usage access. The floating
+All apps button is removed.
+
+## Organize apps with the remote
+
+Hold **OK** on an app to open its actions. Choose **Reorder**, use the D-pad to move it within or between
+the dock and grid, then press **OK** to save or **Back** to cancel. Leaving the launcher or refreshing
+the installed-app list cancels an unfinished move. The on-screen hint and accessibility description
+identify move mode.
+
+App actions also offer dock replacement, removal from Home, App info and **Uninstall**. Removing a dock shortcut
+leaves an **Add app** slot; it does not uninstall the app or clear its data. Replacing a dock app keeps
+the displaced app available in the library. An unavailable pin keeps its saved slot and package
+identity, so editing another shortcut does not erase it; it can be replaced or removed explicitly.
+Recent tiles edit the same app's saved Home shortcut. A recent-only app opened from the library can
+be added to Home or the dock before reordering its permanent shortcut.
+
+**App library**, after the final app row, lists enabled apps with TV or ordinary Android launcher
+entries, once per package. A TV entry is preferred when both exist. Choose an app to open it, add or
+remove its Home shortcut, select a dock slot, open App info, or request uninstall. Default-hidden shortcuts can be added
+back from this list; background-only and disabled packages are not listed.
+
+Dock slots, grid order and hidden shortcuts are saved privately and survive launcher restarts.
+[`config.xml`](launcher/app/src/main/res/values/config.xml) supplies the initial dock and hidden-app
+defaults before a saved layout exists. On an existing installation, use the remote to change saved
+choices; rebuilding with different defaults does not overwrite those choices.
+
+**Uninstall** asks Android to handle removal and show its confirmation; cancelling leaves the app and
+saved layout in place. Confirmed removal can delete the app's data. Android decides whether a system
+or protected app can be removed, whether only its updates can be removed, or whether to refuse the
+request. The normal `REQUEST_DELETE_PACKAGES` permission enables this confirmation flow; it does not
+grant silent removal. No Internet permission is added.
+
+Launcher-owned menus and explanations use the same rounded glass-panel background as Inputs.
+There is no blur, screenshot processing, new animation loop or background worker for the glass
+appearance. Android-owned uninstall and Settings screens keep their system appearance.
 
 ## Connect the TV
 

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_library">App library</string>
+    <string name="app_actions">App options</string>
+    <string name="open_app">Open</string>
+    <string name="no_apps_found">No apps found</string>
+    <string name="move_app">Reorder</string>
+    <string name="uninstall_app">Uninstall</string>
+    <string name="save_move">Save move</string>
+    <string name="cancel_move">Cancel move</string>
+    <string name="replace_dock_app">Replace dock app</string>
+    <string name="remove_from_home">Remove shortcut from Home</string>
+    <string name="add_to_home">Add to Home</string>
+    <string name="add_to_dock">Add to dock</string>
+    <string name="add_app">Add app</string>
+    <string name="choose_dock_app">Choose an app for the dock</string>
+    <string name="installed_app_library">App library</string>
+    <string name="replace_in_dock">Choose a dock slot</string>
+    <string name="dock_updated">Dock updated</string>
+    <string name="move_cancelled">Move cancelled</string>
+    <string name="app_order_saved">App order saved</string>
+    <string name="move_instructions">Arrows to move · OK to save · Back to cancel</string>
+    <string name="removed_from_home">Shortcut removed from Home. Find it in App library.</string>
+    <!-- The argument is an app label. Keep the app name intact. -->
+    <string name="app_on_home">%1$s · On Home</string>
+    <string name="replace_app">Replace %1$s</string>
+    <!-- Spoken state while rearranging an app; the argument is the app label. -->
+    <string name="moving_description">%1$s. Moving. Arrows to move, OK to save, Back to cancel.</string>
+    <string name="app_options_hint">Hold OK for app options</string>
+    <string name="unavailable_app">App unavailable</string>
+    <string name="unavailable_dock_app">%1$s unavailable</string>
+    <string name="empty_dock_slot_description">Empty dock slot %1$d. Add an app.</string>
+    <string name="dock_slot">Dock slot %1$d</string>
+    <!-- First argument is the dock-slot label; second is its app label or empty-slot label. -->
+    <string name="dock_slot_with_app">%1$s: %2$s</string>
+    <string name="action_add_or_replace_app">Add or replace app</string>
+</resources>

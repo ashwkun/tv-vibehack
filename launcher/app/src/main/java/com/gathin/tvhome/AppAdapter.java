@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
@@ -34,27 +35,37 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+
 /**
- * App tiles. The first {@link MainActivity#COLUMNS} positions are the pinned dock (favourites, fixed order),
- * the rest is alphabetical.
+ * Home shortcuts: fixed dock slots, the user's ordered grid, and the App library entry.
  */
 public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
 
     interface TileListener {
         void onTileFocused(int position, View card);
 
-        /** Called for D-pad Up/Down on a tile. Return true when handled. */
-        boolean onTileVerticalKey(int position, int keyCode);
+        boolean onTileKey(int position, int keyCode);
+        void onTileClicked(int position);
+        void onTileLongPressed(int position);
     }
 
     static final class Entry {
+        static final int APP = 0, EMPTY = 1, UNAVAILABLE = 2, LIBRARY = 3,
+                RECENT = 4, RECENT_HEADER = 5, ALL_HEADER = 6;
         final String label;
         final ComponentName component;
         final String pkg;
         final Drawable banner;
         final Drawable icon;
+        final int kind;
+        final String key;
+        final String canonicalKey;
         int ambient;
 
         Entry(String label, ComponentName component, Drawable banner, Drawable icon) {
@@ -63,6 +74,32 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
             this.pkg = component.getPackageName();
             this.banner = banner;
             this.icon = icon;
+            this.kind = APP;
+            this.key = component.flattenToString();
+            this.canonicalKey = key;
+        }
+
+        Entry(Entry app) {
+            this.label = app.label;
+            this.component = app.component;
+            this.pkg = app.pkg;
+            this.banner = app.banner;
+            this.icon = app.icon;
+            this.kind = RECENT;
+            this.key = "recent:" + app.key;
+            this.canonicalKey = app.key;
+            this.ambient = app.ambient;
+        }
+
+        Entry(String label, String pkg, int kind, String key) {
+            this.label = label;
+            this.pkg = pkg;
+            this.kind = kind;
+            this.key = key;
+            this.component = null;
+            this.banner = null;
+            this.icon = null;
+            this.canonicalKey = null;
         }
     }
 
@@ -71,10 +108,13 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     private final Context ctx;
     private final TileListener listener;
     private final int dockSize;
-    /** Dock order (res/values/config.xml, dock_apps). */
-    private final List<String> favourites;
-    /** Never shown as tiles (res/values/config.xml, hidden_apps). */
-    private final Set<String> hidden;
+    private final SharedPreferences layoutPreferences;
+    private HomeLayoutState layout;
+    private HomeLayoutState beforeMove;
+    private String movingKey;
+    private final RecentAppsState recentApps;
+    private SectionNavigation sections;
+    private final Map<String, Entry> available = new LinkedHashMap<>();
     private final List<Entry> items = new ArrayList<>();
     private final StableItemIds stableIds = new StableItemIds();
 
@@ -82,60 +122,198 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         this.ctx = ctx;
         this.listener = listener;
         this.dockSize = dockSize;
-        this.favourites = Arrays.asList(ctx.getResources().getStringArray(R.array.dock_apps));
-        this.hidden = new HashSet<>(Arrays.asList(ctx.getResources().getStringArray(R.array.hidden_apps)));
+        layoutPreferences = ctx.getSharedPreferences("home_layout", Context.MODE_PRIVATE);
+        layout = new HomeLayoutState(dockSize,
+                readList("dock", Arrays.asList(ctx.getResources().getStringArray(R.array.dock_apps))),
+                readList("grid", Collections.emptyList()),
+                readList("hidden", Arrays.asList(ctx.getResources().getStringArray(R.array.hidden_apps))));
+        recentApps = new RecentAppsState(readList("recent", Collections.emptyList()));
+        sections = new SectionNavigation(dockSize, 0, 0);
         setHasStableIds(true);
     }
 
     void reload() {
+        if (beforeMove != null) {
+            layout = beforeMove;
+            beforeMove = null;
+            movingKey = null;
+        }
         PackageManager pm = ctx.getPackageManager();
         Intent probe = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
-        List<ResolveInfo> found = pm.queryIntentActivities(probe, 0);
-        List<Entry> fresh = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
+        List<ResolveInfo> tvApps = pm.queryIntentActivities(probe, 0);
+        List<ResolveInfo> found = new ArrayList<>(tvApps);
+        found.addAll(pm.queryIntentActivities(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0));
+        Set<String> tvPackages = new HashSet<>();
+        for (ResolveInfo info : tvApps) if (info.activityInfo != null) tvPackages.add(info.activityInfo.packageName);
+        available.clear();
+        SharedPreferences.Editor labels = layoutPreferences.edit();
         for (ResolveInfo ri : found) {
             if (ri.activityInfo == null) continue;
             String pkg = ri.activityInfo.packageName;
-            if (pkg.equals(ctx.getPackageName()) || hidden.contains(pkg)) continue;
+            if (pkg.equals(ctx.getPackageName()) || available.containsKey(pkg) || !ri.activityInfo.exported) continue;
             ComponentName component = new ComponentName(pkg, ri.activityInfo.name);
-            if (!seen.add(component.flattenToString())) continue;
             Drawable banner = ri.activityInfo.loadBanner(pm);
             if (banner == null) banner = ri.activityInfo.applicationInfo.loadBanner(pm);
             Drawable icon = ri.loadIcon(pm);
             String label = String.valueOf(ri.loadLabel(pm));
-            fresh.add(new Entry(label, component, banner, icon));
+            available.put(pkg, new Entry(label, component, banner, icon));
+            labels.putString("label:" + pkg, label);
         }
-        Collections.sort(fresh, (a, b) -> {
-            int fa = favourites.indexOf(a.pkg), fb = favourites.indexOf(b.pkg);
-            if (fa >= 0 || fb >= 0) {
-                if (fa < 0) return 1;
-                if (fb < 0) return -1;
-                return Integer.compare(fa, fb);
-            }
-            return a.label.compareToIgnoreCase(b.label);
-        });
+        labels.apply();
+        List<Entry> alphabetic = libraryEntries();
+        List<String> defaults = new ArrayList<>();
+        for (Entry app : alphabetic) if (tvPackages.contains(app.pkg)) defaults.add(app.pkg);
+        layout.reconcileDefaultApps(defaults);
+        saveLayout();
+        rebuildItems();
+    }
+
+    private List<String> readList(String key, List<String> fallback) {
+        String serialized = layoutPreferences.getString(key, null);
+        if (serialized == null) return new ArrayList<>(fallback);
+        try {
+            JSONArray array = new JSONArray(serialized);
+            List<String> result = new ArrayList<>();
+            for (int i = 0; i < array.length(); i++) result.add(array.getString(i));
+            return result;
+        } catch (JSONException e) {
+            return new ArrayList<>(fallback);
+        }
+    }
+
+    private void saveLayout() {
+        layoutPreferences.edit()
+                .putString("dock", new JSONArray(layout.dock()).toString())
+                .putString("grid", new JSONArray(layout.grid()).toString())
+                .putString("hidden", new JSONArray(layout.hidden()).toString()).apply();
+    }
+
+    private void rebuildItems() {
         items.clear();
-        items.addAll(fresh);
+        List<String> dock = layout.dock();
+        for (int slot = 0; slot < dockSize; slot++) {
+            String pkg = dock.get(slot);
+            Entry app = available.get(pkg);
+            if (pkg.isEmpty()) {
+                items.add(new Entry(ctx.getString(R.string.add_app), "", Entry.EMPTY, HomeLayoutState.emptySlotKey(slot)));
+            } else if (app != null) {
+                items.add(app);
+            } else {
+                String label = layoutPreferences.getString("label:" + pkg, null);
+                items.add(new Entry(label == null ? ctx.getString(R.string.unavailable_app)
+                        : ctx.getString(R.string.unavailable_dock_app, label), pkg,
+                        Entry.UNAVAILABLE, HomeLayoutState.unavailablePinKey(pkg)));
+            }
+        }
+        List<String> recent = recentApps.visible(available.keySet(), layout.hidden(), new HashSet<>(dock), dockSize);
+        if (recent.size() < dockSize) recent = Collections.emptyList();
+        List<String> grid = layout.visibleGrid(available.keySet());
+        sections = new SectionNavigation(dockSize, recent.size(), grid.size());
+        if (!recent.isEmpty()) {
+            items.add(new Entry(ctx.getString(R.string.recent_apps), "", Entry.RECENT_HEADER, "section:recent"));
+            for (String pkg : recent) items.add(new Entry(available.get(pkg)));
+        }
+        items.add(new Entry(ctx.getString(R.string.all_apps), "", Entry.ALL_HEADER, "section:all-apps"));
+        for (String pkg : grid) items.add(available.get(pkg));
+        items.add(new Entry(ctx.getString(R.string.app_library), "", Entry.LIBRARY, HomeLayoutState.libraryKey()));
         notifyDataSetChanged();
+    }
+
+    List<Entry> libraryEntries() {
+        List<Entry> result = new ArrayList<>(available.values());
+        Collections.sort(result, (a, b) -> {
+            int compared = a.label.compareToIgnoreCase(b.label);
+            return compared != 0 ? compared : a.pkg.compareTo(b.pkg);
+        });
+        return result;
+    }
+
+    Entry entryAt(int position) { return position >= 0 && position < items.size() ? items.get(position) : null; }
+    boolean isLibraryPosition(int position) { return position >= 0 && position == items.size() - 1; }
+    boolean isOnHome(String pkg) { return layout.isOnHome(pkg); }
+    boolean isMoving() { return beforeMove != null; }
+    String movingKey() { return movingKey; }
+    int homeItemCount() { return dockSize + sections.gridCount; }
+    int homeIndex(int adapterPosition) { return sections.homeIndex(adapterPosition); }
+    int adapterPositionForHomeIndex(int homeIndex) { return sections.adapterPosition(homeIndex); }
+    int horizontalTarget(int position, int direction) { return sections.horizontal(position, direction); }
+    int verticalTarget(int position, int direction) { return sections.vertical(position, direction); }
+    int nearestFocusablePosition(int position) { return sections.nearestFocusable(position); }
+    int firstBelowDock() { return sections.vertical(0, 1); }
+    boolean isFullSpan(int position) {
+        Entry entry = entryAt(position);
+        return entry != null && (entry.kind == Entry.LIBRARY || entry.kind == Entry.RECENT_HEADER
+                || entry.kind == Entry.ALL_HEADER);
+    }
+
+    void addToHome(String pkg) { layout.addToHome(pkg); saveLayout(); rebuildItems(); }
+    void setDock(int slot, String pkg) { layout.setDock(slot, pkg); saveLayout(); rebuildItems(); }
+    void removeFromHome(String pkg) { layout.removeFromHome(pkg); saveLayout(); rebuildItems(); }
+
+    void beginMove(int position) {
+        Entry app = entryAt(position);
+        if (app != null && app.kind == Entry.RECENT) {
+            position = positionOfKey(app.canonicalKey);
+            app = entryAt(position);
+        }
+        if (app == null || app.kind != Entry.APP) return;
+        beforeMove = layout.copy();
+        movingKey = app.key;
+        notifyDataSetChanged(); // Immediately exposes the moving state to accessibility.
+    }
+
+    void moveSelectedTo(int target) {
+        if (!isMoving()) return;
+        int from = homeIndex(positionOfKey(movingKey));
+        if (from < 0 || target < 0 || target >= homeItemCount()) return;
+        layout.move(from, target, layout.visibleGrid(available.keySet()));
+        rebuildItems();
+    }
+
+    String finishMove(boolean save) {
+        if (!isMoving()) return null;
+        String key = movingKey;
+        if (save) saveLayout();
+        else layout = beforeMove;
+        beforeMove = null;
+        movingKey = null;
+        rebuildItems(); // Clears moving descriptions even if the same holder keeps focus.
+        return key;
     }
 
     @NonNull
     @Override
     public Holder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_app, parent, false);
+        int layout = viewType == 1 ? R.layout.item_section_header : R.layout.item_app;
+        View v = LayoutInflater.from(parent.getContext()).inflate(layout, parent, false);
         return new Holder(v, listener);
+    }
+
+    @Override
+    public int getItemViewType(int position) {
+        int kind = items.get(position).kind;
+        return kind == Entry.RECENT_HEADER || kind == Entry.ALL_HEADER ? 1 : 0;
     }
 
     @Override
     public void onBindViewHolder(@NonNull Holder h, int position) {
         Entry e = items.get(position);
+        if (e.kind == Entry.RECENT_HEADER || e.kind == Entry.ALL_HEADER) {
+            ((TextView) h.itemView.findViewById(R.id.sectionTitle)).setText(e.label);
+            h.itemView.findViewById(R.id.sectionHint).setVisibility(e.kind == Entry.RECENT_HEADER ? View.VISIBLE : View.GONE);
+            return;
+        }
         h.name.setText(e.label);
-        h.card.setContentDescription(e.label);
+        h.card.setContentDescription(e.key.equals(movingKey)
+                ? ctx.getString(R.string.moving_description, e.label)
+                : e.kind == Entry.EMPTY ? ctx.getString(R.string.empty_dock_slot_description, position + 1) : e.label);
+        h.card.setAlpha(e.kind == Entry.UNAVAILABLE ? 0.6f : 1f);
         h.banner.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         h.icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         h.label.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         h.name.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        h.name.setVisibility(position < dockSize ? View.INVISIBLE : View.VISIBLE);   // the dock has no labels
+        h.name.setVisibility(e.kind == Entry.RECENT ? View.GONE
+                : position < dockSize || e.kind == Entry.LIBRARY ? View.INVISIBLE : View.VISIBLE);
         boolean focused = h.card.hasFocus();
         h.name.animate().cancel();
         h.card.animate().cancel();
@@ -152,34 +330,47 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         } else {
             h.banner.setImageDrawable(null);
             h.banner.setVisibility(View.GONE);
-            h.icon.setImageDrawable(e.icon);
+            if (e.kind == Entry.LIBRARY) h.icon.setImageResource(R.drawable.ic_apps);
+            else if (e.kind == Entry.EMPTY) h.icon.setImageResource(android.R.drawable.ic_input_add);
+            else if (e.kind == Entry.UNAVAILABLE) h.icon.setImageResource(android.R.drawable.ic_dialog_alert);
+            else h.icon.setImageDrawable(e.icon);
             h.icon.setVisibility(View.VISIBLE);
             h.label.setText(e.label);
             h.label.setVisibility(View.VISIBLE);
         }
-        h.card.setOnClickListener(v -> launch(e));
+        h.card.setOnClickListener(v -> {
+            int current = h.getBindingAdapterPosition();
+            if (current != RecyclerView.NO_POSITION) listener.onTileClicked(current);
+        });
         h.card.setOnLongClickListener(v -> {
-            Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + e.pkg));
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            try {
-                ctx.startActivity(i);
-            } catch (ActivityNotFoundException | SecurityException ignored) {
-                Toast.makeText(ctx, R.string.action_unavailable, Toast.LENGTH_SHORT).show();
-            }
+            int current = h.getBindingAdapterPosition();
+            if (current != RecyclerView.NO_POSITION) listener.onTileLongPressed(current);
             return true;
         });
         ViewCompat.replaceAccessibilityAction(h.card,
                 AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_LONG_CLICK,
-                ctx.getString(R.string.app_info), (view, arguments) -> view.performLongClick());
+                ctx.getString(R.string.app_actions), (view, arguments) -> view.performLongClick());
     }
 
-    private void launch(Entry e) {
+    void openAppInfo(Entry e) {
+        Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + e.pkg));
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            ctx.startActivity(intent);
+        } catch (ActivityNotFoundException | SecurityException ignored) {
+            Toast.makeText(ctx, R.string.action_unavailable, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    void launch(Entry e) {
         Intent i = new Intent(Intent.ACTION_MAIN)
                 .addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
                 .setComponent(e.component)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
         try {
             ctx.startActivity(i);
+            recentApps.record(e.pkg);
+            layoutPreferences.edit().putString("recent", new JSONArray(recentApps.snapshot()).toString()).apply();
         } catch (Exception ex) {
             Toast.makeText(ctx, ctx.getString(R.string.app_unavailable, e.label), Toast.LENGTH_SHORT).show();
         }
@@ -196,8 +387,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     }
 
     String keyAt(int position) {
-        return position >= 0 && position < items.size()
-                ? items.get(position).component.flattenToString() : null;
+        return position >= 0 && position < items.size() ? items.get(position).key : null;
     }
 
     int positionOfKey(String key) {
@@ -276,6 +466,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
             icon = v.findViewById(R.id.icon);
             label = v.findViewById(R.id.label);
             name = v.findViewById(R.id.name);
+            if (card == null) return; // Section headings never take D-pad focus.
 
             final float density = v.getResources().getDisplayMetrics().density;
             final float radius = density * 16f;
@@ -289,9 +480,10 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
 
             card.setOnKeyListener((view, keyCode, event) -> {
                 if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
-                if (keyCode != KeyEvent.KEYCODE_DPAD_UP && keyCode != KeyEvent.KEYCODE_DPAD_DOWN) return false;
+                if (keyCode != KeyEvent.KEYCODE_DPAD_UP && keyCode != KeyEvent.KEYCODE_DPAD_DOWN
+                        && keyCode != KeyEvent.KEYCODE_DPAD_LEFT && keyCode != KeyEvent.KEYCODE_DPAD_RIGHT) return false;
                 int pos = getBindingAdapterPosition();
-                return listener != null && pos != RecyclerView.NO_POSITION && listener.onTileVerticalKey(pos, keyCode);
+                return listener != null && pos != RecyclerView.NO_POSITION && listener.onTileKey(pos, keyCode);
             });
 
             card.setOnFocusChangeListener((view, focused) -> {

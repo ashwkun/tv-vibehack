@@ -1,5 +1,6 @@
 package com.gathin.tvhome;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
@@ -7,16 +8,23 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.Drawable;
+import android.location.LocationManager;
 import android.media.tv.TvContract;
 import android.media.tv.TvInputInfo;
 import android.media.tv.TvInputManager;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.Uri;
+import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -51,11 +59,24 @@ import java.util.Locale;
 /**
  * tvOS style home: black, a pinned dock row, an app grid, and one glass highlight that springs between tiles.
  */
-public class MainActivity extends Activity implements AppAdapter.TileListener {
+public class MainActivity extends Activity implements AppAdapter.TileListener, AppMenu.Callbacks {
+
+    /** TextView may tint its compound drawables on every focus change; preserve the status colour. */
+    private static final class StatusDot extends GradientDrawable {
+        @Override
+        public void setTintList(ColorStateList tint) { }
+
+        @Override
+        public void setTint(int tintColor) { }
+    }
 
     /** Tiles per row and dock slots (res/values/config.xml, columns). Set in onCreate. */
     static int COLUMNS = 4;
     private static final long MINUTE_MS = 60_000L;
+    private static final int WIFI_NAME_PERMISSION_REQUEST = 42;
+    private static final int NETWORK_CONNECTED_COLOR = 0xFF22C55E;
+    private static final int NETWORK_PENDING_COLOR = 0xFFFBBF24;
+    private static final int NETWORK_OFFLINE_COLOR = 0xFF9CA3AF;
     private String liveTvPkg;
 
     private AppAdapter adapter;
@@ -69,8 +90,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean heroShown;
     private TextView greeting;
     private TextView btnWifi;
-    private TextView networkStatus;
-    private View btnAllApps;
+    private GradientDrawable networkIndicator;
+    private Drawable networkTransportIcon;
+    private int networkTransportIconResource = -1;
+    private TextView appOptionsHint;
+    private AppMenu appMenu;
+    private String lastGridKey;
     private SpringAnimation springX, springY;
     private float glassTargetX, glassTargetY;
     private boolean glassShown;
@@ -139,9 +164,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 ambientGlow.setGradientRadius((r - l) * 0.62f));
         greeting = findViewById(R.id.greeting);
         btnWifi = findViewById(R.id.btnWifi);
-        networkStatus = findViewById(R.id.networkStatus);
-        btnAllApps = findViewById(R.id.btnAllApps);
-        btnWifi.setText(R.string.network);
+        appOptionsHint = findViewById(R.id.appOptionsHint);
+        networkIndicator = new StatusDot();
+        networkIndicator.setShape(GradientDrawable.OVAL);
+        int indicatorSize = Math.round(7 * density);
+        networkIndicator.setBounds(0, 0, indicatorSize, indicatorSize);
+        btnWifi.setCompoundDrawableTintList(getResources().getColorStateList(R.color.pill_text, getTheme()));
+        setNetworkPill(getString(R.string.network_pill_checking), 0, NETWORK_PENDING_COLOR);
 
         grid = findViewById(R.id.grid);
         grid.setLayoutManager(new GridLayoutManager(this, COLUMNS));
@@ -151,6 +180,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         grid.setLayoutAnimation(new LayoutAnimationController(
                 AnimationUtils.loadAnimation(this, R.anim.tile_enter), 0.06f));
         adapter = new AppAdapter(this, this, COLUMNS);
+        appMenu = new AppMenu(this, adapter, COLUMNS, this);
+        ((GridLayoutManager) grid.getLayoutManager()).setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
+            @Override
+            public int getSpanSize(int position) {
+                return adapter.isFullSpan(position) ? COLUMNS : 1;
+            }
+        });
         grid.setAdapter(adapter);
 
         // tvOS layout: push the dock row to the bottom of the screen; the grid hides below until you press Down.
@@ -189,20 +225,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         View btnSettings = findViewById(R.id.btnSettings);
         btnInputs.setOnClickListener(v -> showInputs());
         btnWifi.setOnClickListener(v -> openNetworkSettings());
-        btnSettings.setOnClickListener(v -> open(new Intent(Settings.ACTION_SETTINGS)));
-        btnAllApps.setOnClickListener(v -> expandApps());
-        btnAllApps.setOnKeyListener((v, keyCode, event) -> {
-            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
-            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                focusDock();
-                return true;
-            }
-            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                expandApps();
-                return true;
-            }
-            return keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT;
+        btnWifi.setOnLongClickListener(v -> {
+            appMenu.showNetworkOptions(this::showWifiName, this::openNetworkSettings, this::openAppSettings);
+            return true;
         });
+        btnSettings.setOnClickListener(v -> open(new Intent(Settings.ACTION_SETTINGS)));
 
         // Keep focus on the top bar at its ends and at the top: Android's focus finder would otherwise
         // jump to a tile far below when there is nothing in that direction.
@@ -255,6 +282,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         restoringFocus = false;
         cancelPendingFocus();
         cancelHeroAnimations();
+        appMenu.dismiss();
+        if (adapter.isMoving()) adapter.finishMove(false);
         if (inputsPopup != null) inputsPopup.dismiss();
         stopNetworkMonitoring();
         if (packageReceiverRegistered) {
@@ -267,7 +296,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     @Override
     public void onBackPressed() {
-        if (appsExpanded) focusDock();
+        if (adapter.isMoving()) onMoveFinished(false);
+        else if (appsExpanded) focusDock();
     }
 
     private void registerPackageReceiver() {
@@ -286,6 +316,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     private void refreshApps(boolean animateEntrance) {
+        appMenu.dismiss();
         View focused = getCurrentFocus();
         boolean restoreTile = focused == null || focused.getId() == R.id.card;
         String selectedKey = lastFocusedKey;
@@ -302,7 +333,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         restoringFocus = true;
         adapter.reload();
         if (animateEntrance) grid.scheduleLayoutAnimation();
-        updateAllAppsVisibility();
+        updateMoveInstructions();
         grid.post(() -> {
             if (!resumed || generation != refreshGeneration) return;
             restoringFocus = false;
@@ -334,7 +365,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (editor != null) editor.apply();
         }
         appsExpanded = position >= COLUMNS;
-        updateAllAppsVisibility();
+        if (appsExpanded && !adapter.isLibraryPosition(position)) lastGridKey = key;
+        updateMoveInstructions();
         // Tile rect in root coordinates, using layout positions (ignores the scale animation).
         Rect r = new Rect(0, 0, card.getWidth(), card.getHeight());
         root.offsetDescendantRectToMyCoords(card, r);
@@ -370,7 +402,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             int decoratedTop = item.getTop() - (int) (6 * density);
             int dy = decoratedTop - grid.getPaddingTop();
             if (Math.abs(dy) > 1) grid.smoothScrollBy(0, dy);
-            showHero(position, r.top - dy);
+            if (adapter.isMoving()) hideHero();
+            else showHero(position, r.top - dy);
         } else {
             hideHero();
             // Scroll just enough so the whole glass (not only the tile) is visible.
@@ -384,7 +417,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private void showHero(int position, float dockTopInRoot) {
         String label = adapter.labelAt(position);
         int color = adapter.ambientColorAt(position);
-        float y = dockTopInRoot - 14 * density - 26 * density - heroName.getHeight();
+        Rect gridBounds = new Rect(0, 0, grid.getWidth(), grid.getHeight());
+        root.offsetDescendantRectToMyCoords(grid, gridBounds);
+        float y = Math.max(gridBounds.top + 4 * density,
+                dockTopInRoot - 14 * density - 26 * density - heroName.getHeight());
+        if (y + heroName.getHeight() > dockTopInRoot - 14 * density) {
+            hideHero();
+            return;
+        }
         boolean changed = !label.contentEquals(heroName.getText());
         cancelHeroAnimations();
         final int generation = heroGeneration;
@@ -437,7 +477,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     private void hideHero() {
         cancelHeroAnimations();
-        if (!heroShown) return;
+        if (!heroShown) {
+            // A second grid focus can interrupt the fade started by the first one.
+            heroName.setAlpha(0f);
+            ambient.setAlpha(0f);
+            return;
+        }
         heroShown = false;
         heroName.animate().alpha(0f).setDuration(160).start();
         ambient.animate().alpha(0f).setDuration(300).start();
@@ -452,26 +497,99 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     // ---- navigation ------------------------------------------------------------------------------
 
     @Override
-    public boolean onTileVerticalKey(int position, int keyCode) {
-        int count = adapter.getItemCount();
+    public boolean onTileKey(int position, int keyCode) {
+        int homeCount = adapter.homeItemCount();
+        if (adapter.isMoving()) {
+            int homePosition = adapter.homeIndex(position);
+            if (homePosition < 0) homePosition = adapter.homeIndex(adapter.positionOfKey(adapter.movingKey()));
+            int target = homePosition;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) target -= COLUMNS;
+            else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                int lastRowStart = ((homeCount - 1) / COLUMNS) * COLUMNS;
+                if (homePosition < lastRowStart) target = Math.min(homePosition + COLUMNS, homeCount - 1);
+            }
+            else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && homePosition % COLUMNS > 0) target--;
+            else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && homePosition % COLUMNS < COLUMNS - 1) target++;
+            if (target >= 0 && target < homeCount && target != homePosition) {
+                adapter.moveSelectedTo(target);
+                onLayoutChanged(adapter.movingKey());
+            }
+            return true;
+        }
+        if (adapter.isLibraryPosition(position) && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+            int previous = adapter.positionOfKey(lastGridKey);
+            if (previous >= COLUMNS && !adapter.isLibraryPosition(previous)) {
+                focusTile(previous);
+                return true;
+            }
+        }
         int target;
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-            if (position < COLUMNS) return false;          // dock row: let focus move to the top bar
-            target = position - COLUMNS;
-        } else {
-            int lastRowStart = ((count - 1) / COLUMNS) * COLUMNS;
-            if (position >= lastRowStart) return true;     // already on the last row: stay put
-            target = Math.min(position + COLUMNS, count - 1);
-        }
-        focusTile(target);
+            target = adapter.verticalTarget(position, -1);
+            if (target < 0) return false;
+        } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+            target = adapter.verticalTarget(position, 1);
+        } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+            target = adapter.horizontalTarget(position, -1);
+        } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            target = adapter.horizontalTarget(position, 1);
+        } else return false;
+        if (target != position) focusTile(target);
         return true;
+    }
+
+    @Override
+    public void onTileClicked(int position) {
+        if (adapter.isMoving()) {
+            onMoveFinished(true);
+            return;
+        }
+        AppAdapter.Entry entry = adapter.entryAt(position);
+        if (entry == null) return;
+        if (entry.kind == AppAdapter.Entry.APP || entry.kind == AppAdapter.Entry.RECENT) adapter.launch(entry);
+        else if (entry.kind == AppAdapter.Entry.EMPTY) appMenu.chooseDockApp(position);
+        else if (entry.kind == AppAdapter.Entry.LIBRARY) appMenu.showLibrary();
+        else appMenu.showHomeOptions(position);
+    }
+
+    @Override
+    public void onTileLongPressed(int position) {
+        appMenu.showHomeOptions(position);
+    }
+
+    @Override
+    public void onMoveRequested(int position) {
+        adapter.beginMove(position);
+        onLayoutChanged(adapter.movingKey());
+    }
+
+    @Override
+    public void onMoveFinished(boolean save) {
+        String key = adapter.finishMove(save);
+        if (key == null) return;
+        onLayoutChanged(key);
+        Toast.makeText(this, save ? R.string.app_order_saved : R.string.move_cancelled, Toast.LENGTH_SHORT).show();
+    }
+
+    @Override
+    public void onLayoutChanged(String preferredKey) {
+        cancelPendingFocus();
+        final int generation = ++refreshGeneration;
+        restoringFocus = true;
+        updateMoveInstructions();
+        grid.post(() -> {
+            if (!resumed || generation != refreshGeneration) return;
+            restoringFocus = false;
+            int position = adapter.positionOfKey(preferredKey);
+            focusTile(position != RecyclerView.NO_POSITION ? position : lastFocused);
+        });
     }
 
     private void focusTile(int position) {
         cancelPendingFocus();
         grid.stopScroll();
         if (adapter.getItemCount() == 0) return;
-        final int pos = Math.max(0, Math.min(position, adapter.getItemCount() - 1));
+        final int pos = adapter.nearestFocusablePosition(Math.max(0, Math.min(position, adapter.getItemCount() - 1)));
         final String key = adapter.keyAt(pos);
         final int generation = focusGeneration;
         RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(pos);
@@ -528,12 +646,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         focusTile(position >= 0 && position < COLUMNS ? position : 0);
     }
 
-    private void expandApps() {
-        if (adapter.getItemCount() > COLUMNS) focusTile(COLUMNS);
-    }
-
-    private void updateAllAppsVisibility() {
-        btnAllApps.setVisibility(!appsExpanded && adapter.getItemCount() > COLUMNS ? View.VISIBLE : View.INVISIBLE);
+    private void updateMoveInstructions() {
+        appOptionsHint.setText(R.string.move_instructions);
+        appOptionsHint.setVisibility(adapter.isMoving() ? View.VISIBLE : View.GONE);
     }
 
     // ---- top bar ---------------------------------------------------------------------------------
@@ -558,7 +673,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             updateNetworkStatus();
             return;
         }
-        networkStatus.setText(R.string.network_connecting);
+        setNetworkPill(getString(R.string.network_pill_checking), 0, NETWORK_PENDING_COLOR);
         btnWifi.setContentDescription(getString(R.string.network_status_description,
                 getString(R.string.network_connecting)));
         networkCallback = new ConnectivityManager.NetworkCallback() {
@@ -620,22 +735,138 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     private void updateNetworkStatus() {
         int label;
+        int pillLabel;
+        int icon;
+        int indicatorColor;
         NetworkCapabilities capabilities = defaultNetworkCapabilities;
-        if (defaultNetwork == null) label = R.string.network_disconnected;
-        else if (capabilities == null) label = R.string.network_connecting;
+        String wifiName = capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                ? readWifiName(capabilities) : null;
+        if (defaultNetwork == null) {
+            label = R.string.network_disconnected;
+            pillLabel = R.string.offline;
+            icon = R.drawable.ic_network_offline;
+            indicatorColor = NETWORK_OFFLINE_COLOR;
+        } else if (capabilities == null) {
+            label = R.string.network_connecting;
+            pillLabel = R.string.network_pill_checking;
+            icon = 0;
+            indicatorColor = NETWORK_PENDING_COLOR;
+        }
         else if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)) {
             label = R.string.network_captive_portal;
+            pillLabel = R.string.network_pill_captive_portal;
+            icon = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                    ? R.drawable.ic_wifi : R.drawable.ic_network_offline;
+            indicatorColor = NETWORK_PENDING_COLOR;
         } else if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
             label = R.string.network_no_internet;
+            pillLabel = R.string.network_pill_no_internet;
+            icon = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                    ? R.drawable.ic_wifi : R.drawable.ic_network_offline;
+            indicatorColor = NETWORK_PENDING_COLOR;
         } else if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
             label = R.string.network_connected_ethernet;
+            pillLabel = R.string.ethernet;
+            icon = R.drawable.ic_ethernet;
+            indicatorColor = NETWORK_CONNECTED_COLOR;
         } else if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
             label = R.string.network_connected_wifi;
-        } else label = R.string.network_connected;
+            pillLabel = R.string.wifi;
+            icon = R.drawable.ic_wifi;
+            indicatorColor = NETWORK_CONNECTED_COLOR;
+        } else {
+            label = R.string.network_connected;
+            pillLabel = R.string.network_connected;
+            icon = 0;
+            indicatorColor = NETWORK_CONNECTED_COLOR;
+        }
         String status = getString(label);
-        networkStatus.setText(status);
-        btnWifi.setContentDescription(getString(R.string.network_status_description, status));
+        String pill = label == R.string.network_connected_wifi && wifiName != null ? wifiName : getString(pillLabel);
+        setNetworkPill(pill, icon, indicatorColor);
+        btnWifi.setContentDescription(wifiName == null ? getString(R.string.network_status_description, status)
+                : getString(R.string.network_named_status_description, wifiName, status));
         if (Build.VERSION.SDK_INT >= 30) btnWifi.setStateDescription(status);
+    }
+
+    private void setNetworkPill(String label, int icon, int indicatorColor) {
+        if (networkTransportIconResource != icon) {
+            networkTransportIconResource = icon;
+            networkTransportIcon = icon == 0 ? null : getDrawable(icon).mutate();
+            if (networkTransportIcon != null) {
+                networkTransportIcon.setTintList(getResources().getColorStateList(R.color.pill_text, getTheme()));
+                networkTransportIcon.setBounds(0, 0, networkTransportIcon.getIntrinsicWidth(), networkTransportIcon.getIntrinsicHeight());
+            }
+        }
+        networkIndicator.setColor(indicatorColor);
+        btnWifi.setText(label);
+        btnWifi.setCompoundDrawablesRelative(networkTransportIcon, null, networkIndicator, null);
+    }
+
+    private boolean hasWifiNamePermission() {
+        return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                && checkSelfPermission(Manifest.permission.ACCESS_WIFI_STATE) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean isLocationModeEnabled() {
+        try {
+            LocationManager manager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+            if (Build.VERSION.SDK_INT >= 28) return manager != null && manager.isLocationEnabled();
+            return Settings.Secure.getInt(getContentResolver(), Settings.Secure.LOCATION_MODE,
+                    Settings.Secure.LOCATION_MODE_OFF) != Settings.Secure.LOCATION_MODE_OFF;
+        } catch (SecurityException e) {
+            return false;
+        }
+    }
+
+    private String readWifiName(NetworkCapabilities capabilities) {
+        if (!hasWifiNamePermission() || !isLocationModeEnabled()) return null;
+        try {
+            if (Build.VERSION.SDK_INT >= 29 && capabilities.getTransportInfo() instanceof WifiInfo) {
+                String name = cleanWifiName(((WifiInfo) capabilities.getTransportInfo()).getSSID());
+                if (name != null) return name;
+            }
+            // Compatibility fallback for redacted callbacks and Android 8/9; never starts a scan.
+            WifiManager manager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            WifiInfo info = manager != null ? manager.getConnectionInfo() : null;
+            return info != null ? cleanWifiName(info.getSSID()) : null;
+        } catch (SecurityException e) {
+            return null;
+        }
+    }
+
+    private static String cleanWifiName(String value) {
+        if (value == null) return null;
+        String name = value.trim();
+        if (name.length() >= 2 && name.startsWith("\"") && name.endsWith("\"")) {
+            name = name.substring(1, name.length() - 1);
+        }
+        return name.isEmpty() || WifiManager.UNKNOWN_SSID.equalsIgnoreCase(name) || "0x".equals(name) ? null : name;
+    }
+
+    private void showWifiName() {
+        if (!hasWifiNamePermission()) {
+            appMenu.showWifiNamePermission(() -> requestPermissions(new String[]{Manifest.permission.ACCESS_COARSE_LOCATION,
+                    Manifest.permission.ACCESS_FINE_LOCATION}, WIFI_NAME_PERMISSION_REQUEST));
+        } else if (!isLocationModeEnabled()) {
+            appMenu.showLocationRequirement(() -> {
+                Intent locationSettings = new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+                if (locationSettings.resolveActivity(getPackageManager()) == null) locationSettings = new Intent(Settings.ACTION_SETTINGS);
+                open(locationSettings);
+            });
+        } else updateNetworkStatus();
+    }
+
+    private void openAppSettings() {
+        open(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())));
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != WIFI_NAME_PERMISSION_REQUEST) return;
+        if (hasWifiNamePermission()) showWifiName();
+        else Toast.makeText(this, R.string.wifi_name_permission_denied, Toast.LENGTH_LONG).show();
+        updateNetworkStatus();
     }
 
     private void openNetworkSettings() {
@@ -720,9 +951,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (visibleBounds.isEmpty()) visibleBounds.set(0, 0, root.getWidth(), root.getHeight());
         int margin = Math.round(16 * density);
         int maxWidth = Math.max(1, visibleBounds.width() - 2 * margin);
-        panel.measure(View.MeasureSpec.makeMeasureSpec(maxWidth, View.MeasureSpec.AT_MOST),
+        panel.measure(View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-        int width = Math.min(maxWidth, Math.max(anchor.getWidth(), panel.getMeasuredWidth()));
+        int width = Math.min(Math.min(maxWidth, Math.round(360 * density)),
+                Math.max(anchor.getWidth(), panel.getMeasuredWidth()));
         panel.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
         int[] anchorLocation = new int[2];

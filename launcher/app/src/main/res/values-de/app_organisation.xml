@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_library">App-Bibliothek</string>
+    <string name="app_actions">App-Optionen</string>
+    <string name="open_app">Öffnen</string>
+    <string name="no_apps_found">Keine Apps gefunden</string>
+    <string name="move_app">Neu anordnen</string>
+    <string name="uninstall_app">Deinstallieren</string>
+    <string name="save_move">Verschiebung speichern</string>
+    <string name="cancel_move">Verschiebung abbrechen</string>
+    <string name="replace_dock_app">Dock-App ersetzen</string>
+    <string name="remove_from_home">Verknüpfung von Home entfernen</string>
+    <string name="add_to_home">Zu Home hinzufügen</string>
+    <string name="add_to_dock">Zum Dock hinzufügen</string>
+    <string name="add_app">App hinzufügen</string>
+    <string name="choose_dock_app">App für das Dock auswählen</string>
+    <string name="installed_app_library">App-Bibliothek</string>
+    <string name="replace_in_dock">Dock-Platz auswählen</string>
+    <string name="dock_updated">Dock aktualisiert</string>
+    <string name="move_cancelled">Verschiebung abgebrochen</string>
+    <string name="app_order_saved">App-Reihenfolge gespeichert</string>
+    <string name="move_instructions">Pfeile zum Verschieben · OK zum Speichern · Zurück zum Abbrechen</string>
+    <string name="removed_from_home">Verknüpfung von Home entfernt. Du findest sie in der App-Bibliothek.</string>
+    <string name="app_on_home">%1$s · Auf Home</string>
+    <string name="replace_app">%1$s ersetzen</string>
+    <string name="moving_description">%1$s. Wird verschoben. Pfeile zum Verschieben, OK zum Speichern, Zurück zum Abbrechen.</string>
+    <string name="app_options_hint">OK für App-Optionen gedrückt halten</string>
+    <string name="unavailable_app">App nicht verfügbar</string>
+    <string name="unavailable_dock_app">%1$s nicht verfügbar</string>
+    <string name="empty_dock_slot_description">Leerer Dock-Platz %1$d. Füge eine App hinzu.</string>
+    <string name="dock_slot">Dock-Platz %1$d</string>
+    <string name="dock_slot_with_app">%1$s: %2$s</string>
+    <string name="action_add_or_replace_app">App hinzufügen oder ersetzen</string>
+</resources>

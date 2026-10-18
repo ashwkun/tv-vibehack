@@ -31,8 +31,15 @@ def main():
         time.sleep(0.6)
 
     def capture(name):
-        run("shell", "uiautomator", "dump", "/data/local/tmp/tvhome-check.xml")
-        data = run("exec-out", "cat", "/data/local/tmp/tvhome-check.xml")
+        for attempt in range(3):
+            run("shell", "rm", "-f", "/data/local/tmp/tvhome-check.xml")
+            result = run("shell", "uiautomator", "dump", "/data/local/tmp/tvhome-check.xml")
+            if b"dumped to" in result:
+                data = run("exec-out", "cat", "/data/local/tmp/tvhome-check.xml")
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError("UI capture failed after three attempts; no stale dump was used")
         (args.output / f"{name}.xml").write_bytes(data)
         (args.output / f"{name}.png").write_bytes(run("exec-out", "screencap", "-p"))
         return ET.fromstring(data)

@@ -13,6 +13,52 @@
     <style name="TextOutfit.Weight400" parent="TextOutfit" />
     <style name="TextOutfit.Weight500" parent="TextOutfit" />
 
+    <style name="AppDialog" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:fontFamily">@font/outfit</item>
+        <item name="android:colorAccent">#FFFFFFFF</item>
+        <item name="android:colorControlHighlight">#33FFFFFF</item>
+        <item name="android:colorBackground">@android:color/transparent</item>
+        <item name="android:colorBackgroundFloating">@android:color/transparent</item>
+        <item name="android:windowBackground">@drawable/glass_panel</item>
+        <item name="android:windowElevation">0dp</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.25</item>
+        <item name="android:windowTitleStyle">@style/AppDialogTitle</item>
+        <item name="android:buttonBarNegativeButtonStyle">@style/AppDialogButton</item>
+        <item name="android:buttonBarPositiveButtonStyle">@style/AppDialogButton</item>
+        <item name="android:buttonBarNeutralButtonStyle">@style/AppDialogButton</item>
+        <item name="android:windowMinWidthMajor">48%</item>
+        <item name="android:windowMinWidthMinor">70%</item>
+    </style>
+
+    <style name="AppDialogTitle" parent="TextOutfit.Weight500">
+        <item name="android:textColor">#FFFFFFFF</item>
+        <item name="android:textSize">20sp</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:background">@android:color/transparent</item>
+        <item name="android:maxLines">2</item>
+        <item name="android:ellipsize">end</item>
+    </style>
+
+    <style name="AppDialogButton" parent="android:Widget.Material.Button.Borderless">
+        <item name="android:fontFamily">@font/outfit</item>
+        <item name="android:textAppearance">@style/TextOutfit.Weight500</item>
+        <item name="android:textColor">@color/pill_text</item>
+        <item name="android:background">@drawable/pill_bg</item>
+        <item name="android:backgroundTint">@null</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textSize">15sp</item>
+        <item name="android:minWidth">88dp</item>
+        <item name="android:minHeight">42dp</item>
+        <item name="android:paddingStart">20dp</item>
+        <item name="android:paddingEnd">20dp</item>
+        <item name="android:paddingTop">8dp</item>
+        <item name="android:paddingBottom">8dp</item>
+        <item name="android:elevation">0dp</item>
+        <item name="android:stateListAnimator">@null</item>
+    </style>
+
     <!-- Variable-font weights are applied only on Android 9 and later. -->
     <style name="TopButton" parent="TextOutfit.Weight500">
         <item name="android:layout_width">wrap_content</item>
@@ -25,11 +71,11 @@
         <item name="android:paddingBottom">8dp</item>
         <item name="android:gravity">center</item>
         <item name="android:background">@drawable/pill_bg</item>
-        <item name="android:textColor">@drawable/pill_text</item>
+        <item name="android:textColor">@color/pill_text</item>
         <item name="android:textSize">15sp</item>
         <item name="android:letterSpacing">0.01</item>
         <item name="android:drawablePadding">9dp</item>
-        <item name="android:drawableTint">@drawable/pill_text</item>
+        <item name="android:drawableTint">@color/pill_text</item>
         <item name="android:focusable">true</item>
         <item name="android:clickable">true</item>
         <item name="android:singleLine">true</item>

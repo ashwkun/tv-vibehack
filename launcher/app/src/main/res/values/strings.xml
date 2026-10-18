@@ -6,6 +6,7 @@
     <string name="settings">TV settings</string>
     <string name="network">Network</string>
     <string name="all_apps">All apps</string>
+    <string name="recent_apps">Recent apps</string>
     <string name="app_info">App info</string>
     <string name="choose_input">Inputs</string>
     <string name="connected">Connected</string>
@@ -30,7 +31,22 @@
     <string name="network_captive_portal">Sign in to network</string>
     <string name="network_disconnected">Disconnected</string>
     <string name="network_connecting">Checking connection</string>
+    <string name="network_pill_checking">Checking</string>
+    <string name="network_pill_no_internet">No Internet</string>
+    <string name="network_pill_captive_portal">Sign-in needed</string>
     <!-- The argument is the current connection status, not the network name. -->
     <string name="network_status_description">Network. %1$s</string>
+    <!-- First argument is the network name; second is the current connection status. -->
+    <string name="network_named_status_description">Network. %1$s. %2$s</string>
+    <string name="show_wifi_name">Show Wi-Fi name</string>
+    <string name="network_settings">Network settings</string>
+    <string name="open_app_settings">App settings</string>
+    <string name="wifi_name_permission_title">Show Wi-Fi name</string>
+    <string name="wifi_name_permission_message">Android requires location access and Location turned on to show your Wi-Fi name. Home reads the current Wi-Fi name without reading your coordinates.</string>
+    <string name="wifi_name_permission_action">Allow location access</string>
+    <string name="wifi_name_permission_denied">Wi-Fi name is hidden until location access is allowed.</string>
+    <string name="wifi_name_location_title">Turn on Location</string>
+    <string name="wifi_name_location_message">Android needs Location turned on to show your Wi-Fi name. Home only reads the current network name.</string>
+    <string name="open_location_settings">Open Location settings</string>
     <string name="input_hdmi_label">HDMI %1$s</string>
 </resources>

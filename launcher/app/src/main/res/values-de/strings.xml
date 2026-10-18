@@ -6,6 +6,7 @@
     <string name="settings">TV-Einstellungen</string>
     <string name="network">Netzwerk</string>
     <string name="all_apps">Alle Apps</string>
+    <string name="recent_apps">Zuletzt verwendete Apps</string>
     <string name="app_info">App-Info</string>
     <string name="choose_input">Quellen</string>
     <string name="connected">Verbunden</string>
@@ -29,6 +30,20 @@
     <string name="network_captive_portal">Im Netzwerk anmelden</string>
     <string name="network_disconnected">Nicht verbunden</string>
     <string name="network_connecting">Verbindung wird geprüft</string>
+    <string name="network_pill_checking">Wird geprüft</string>
+    <string name="network_pill_no_internet">Kein Internet</string>
+    <string name="network_pill_captive_portal">Anmeldung nötig</string>
     <string name="network_status_description">Netzwerk. %1$s</string>
+    <string name="network_named_status_description">Netzwerk. %1$s. %2$s</string>
+    <string name="show_wifi_name">WLAN-Namen anzeigen</string>
+    <string name="network_settings">Netzwerkeinstellungen</string>
+    <string name="open_app_settings">App-Einstellungen</string>
+    <string name="wifi_name_permission_title">WLAN-Namen anzeigen</string>
+    <string name="wifi_name_permission_message">Android benötigt Standortzugriff und die eingeschaltete Option „Standort“, um den WLAN-Namen anzuzeigen. Home liest den aktuellen WLAN-Namen, ohne deine Koordinaten abzufragen.</string>
+    <string name="wifi_name_permission_action">Standortzugriff erlauben</string>
+    <string name="wifi_name_permission_denied">Der WLAN-Name bleibt ohne Standortzugriff ausgeblendet.</string>
+    <string name="wifi_name_location_title">Standort einschalten</string>
+    <string name="wifi_name_location_message">Schalte „Standort“ ein, damit Android den WLAN-Namen anzeigen kann. Home liest nur den aktuellen Netzwerknamen.</string>
+    <string name="open_location_settings">Standorteinstellungen öffnen</string>
     <string name="input_hdmi_label">HDMI %1$s</string>
 </resources>

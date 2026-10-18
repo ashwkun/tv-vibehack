@@ -17,7 +17,7 @@
         android:id="@+id/icon"
         android:layout_width="20dp"
         android:layout_height="20dp"
-        android:tint="@drawable/pill_text"
+        android:tint="@color/pill_text"
         android:duplicateParentState="true"
         android:contentDescription="@null" />
 
@@ -35,7 +35,7 @@
             style="@style/TextOutfit.Weight500"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textColor="@drawable/pill_text"
+            android:textColor="@color/pill_text"
             android:duplicateParentState="true"
             android:textSize="15sp"
             android:singleLine="true"
@@ -47,7 +47,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
-            android:textColor="@drawable/pill_text_dim"
+            android:textColor="@color/pill_text_dim"
             android:duplicateParentState="true"
             android:textSize="12sp"
             android:singleLine="true"
