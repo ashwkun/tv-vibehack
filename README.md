@@ -16,18 +16,23 @@ and a reviewed device-specific list.
 
 Phase 1 focuses on app identity and focus restoration, accurate Network status, cancelling stale
 hero-title animations, accessibility, and safer build/install tooling. A compact network pill shows
-the current Wi-Fi name when Android permits it, with a connection icon and a green, amber or gray
-status indicator. Ethernet, Offline, No Internet, Sign-in needed and Checking states have short labels;
+the current Wi-Fi name when Android permits it, with a connection icon and a subtle status mark.
+Ethernet, Offline, No Internet, Sign-in needed and Checking states have short labels;
 full status remains available to accessibility services. If Android hides the Wi-Fi name, the pill
-falls back to Wi-Fi and still reports connection status. Green means internet access is validated,
-amber means checking or attention is needed, and gray means offline.
+falls back to Wi-Fi and still reports connection status. The connected mark is neutral silver;
+checking or attention uses a muted warm tone, and offline uses gray.
 See [development notes and upstream credits](docs/development.md) for scope and validation status.
 
-Hold **OK** on the network pill and choose **Show Wi-Fi name** to enable name access. Android protects
-the name with location permission and the TV's Location setting. Home explains this before requesting
-permission; it does not prompt at startup or turn on Location itself. The name lookup reads the current
-Wi-Fi connection, without Wi-Fi scans, coordinate lookup or polling. Denying permission leaves the
-network shortcut usable. The installer grants no runtime permissions.
+The header uses open, left-aligned typography: a small greeting, a large light clock and one full-date
+line underneath. Native text and clock views keep the layout lightweight, without blur or a new
+animation loop.
+
+Hold **OK** on the network pill and choose **Show Wi-Fi name** to enable name access. Home explains
+Android's location permission before requesting it, then lets Android decide whether to reveal the
+name. Some TVs also require Location turned on; Home offers settings guidance when the name remains
+hidden and Location is off. It does not prompt at startup or turn on Location itself. The lookup reads
+the current Wi-Fi connection, without Wi-Fi scans, coordinate lookup or polling. Denying permission
+leaves the network shortcut usable. The installer grants no runtime permissions.
 
 Phase 2 adds remote dock editing and an installed-app library, adapted from upstream
 [PR #19](https://github.com/Gathin23/tv-vibehack/pull/19), with separate identities for apps, empty slots,

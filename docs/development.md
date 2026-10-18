@@ -10,12 +10,18 @@ upstream pull-request descriptions and screenshots are author evidence, not vali
   [PR #16](https://github.com/Gathin23/tv-vibehack/pull/16), while preserving focused tile visuals.
 - Accurate network state using Android network capabilities, informed by
   [PR #9](https://github.com/Gathin23/tv-vibehack/pull/9). Current status appears inside one compact pill
-  with the available Wi-Fi name, connection icon and green/amber/gray indicator; the separate status
+  with the available Wi-Fi name, connection icon and a subtle neutral connection mark; the separate status
   line is removed. Full content/state descriptions remain available to accessibility services.
   Captive portal, missing validation, Ethernet, Wi-Fi, offline and checking branches are source-reviewed;
   this does not imply every network state was replayed on hardware.
 - Cancel stale hero-title/glow animation callbacks during quick focus changes.
+- Set the greeting, clock and full date in an open, left-aligned header: a small sentence-case greeting,
+  a large light clock and one date line below. Native `TextClock` views add no blur, capture, frame loop
+  or service.
 - Improve app-tile accessibility and restore visible focus after returning from another app.
+  During an offscreen focus request, rapid D-pad navigation advances from the latest requested app
+  key. Package refresh preserves that logical target; completed focus, cancellation or leaving the
+  launcher clears it.
 - Measure the Inputs popup to fit its contents, drawing on
   [PR #5](https://github.com/Gathin23/tv-vibehack/pull/5). Input connection states remain the states
   reported by the device; an HDMI input is not assumed to be connected on every firmware.
@@ -90,6 +96,11 @@ The network pill reads only the current connection's SSID from `WifiInfo`, with 
 Android can redact the name when precise location access or the system Location setting is unavailable;
 the pill then retains its Wi-Fi/status fallback. Android documents this name redaction in
 [`WifiInfo.getSSID()`](https://developer.android.com/reference/android/net/wifi/WifiInfo#getSSID()).
+The lookup checks the granted fine-location and Wi-Fi permissions, then relies on the public API's
+redaction and exception handling rather than rejecting the read solely because Location reports off.
+Show Wi-Fi name offers Location settings guidance only if the API cannot supply a name and Location
+is off. This accommodates firmware differences without changing system settings or using a privileged
+identity.
 The lookup does not scan networks, read coordinates, poll or add a background service. Connection
 validation and transport status continue to come from network capabilities.
 
@@ -110,17 +121,59 @@ downloading, blur or background service is planned in this phase.
 
 ## Validation
 
-Build and lint results are separate from hardware behavior. Record the tested revision and device,
-including focus after app-list changes/recreation, rapid dock changes, app launch/return, network
-changes, Home selection and inputs. Tooling checks should cover installation/launch failure and
-firmware Home-priority failures with mock adb before any live run. Casting, voice, account setup and
-OTA installation must be marked untested unless exercised end to end.
+On 18 October 2026, debug build 12 (`2.3.6`) passed `assembleDebug` and `lintDebug` with zero errors
+and 21 warnings. Hardware checks used a MiTV-MZTU0 running Android 14. Build and lint results remain
+separate from the device observations below.
 
-The pure identity and saved-layout tests pass. An independent read-only model review also exercised
-100,000 deterministic operations covering dock/grid moves, replacements, hiding/restoring apps,
-availability changes and persistence reconstruction; available nonhidden shortcuts remained unique
+All four pure Java suites pass: stable identities, saved layout, recent opens and section navigation.
+Nine isolated installer/restore mock cases also pass, covering install/launch failures, ignored Home
+selection, setup-helper priority, opt-in stock disabling and exact prior-state restoration. These mocks
+use a fake adb executable and do not contact a TV.
+
+An independent read-only model review also exercised 100,000 deterministic operations covering
+dock/grid moves, replacements, hiding/restoring apps, availability changes and persistence reconstruction;
+available nonhidden shortcuts remained unique
 and preserved. This model result does not establish remote focus, dialog layout or device behavior.
-Phase-2 hardware validation is pending the final device checks.
+
+Hardware observations on build 12:
+
+- Six rapid Down presses reached App library. Seven rapid Up presses reached the top controls;
+  Down from there restored the remembered YouTube dock tile.
+- Immediate Down, Right, Right, OK opened the intended VLC app. Home restored its Recent apps tile.
+- Immediate Down, Down, Hold OK opened Apple TV's actions. Back dismissed the menu without launching
+  an app or changing launch history or the saved layout.
+- Reorder moved Apple TV from the grid into the dock. Back first left the exact saved layout unchanged;
+  saving persisted the change, and force-stop followed by Home retained it.
+- The new dock app disappeared from Recent apps. The displaced YouTube app was already in launch
+  history and became eligible, so the Recent apps row remained full and visible.
+
+After testing, the dock was restored to the user's saved order: YouTube, Netflix, Hotstar, Prime.
+Hidden shortcuts were unchanged and the visible grid order matched the baseline. Down from the dock
+reached the Recent apps VLC tile; Back returned to the YouTube dock tile. Final package inspection
+confirmed version code 12/name `2.3.6`, Home resolved to the custom launcher, and the disabled-package
+set matched the state from before the app update. Remembered grid positions for dock-pinned packages
+can change during swaps.
+
+Build 10 (`2.3.4`) also established the following device behavior before the dispatcher fixes:
+
+- The open header and neutral silver connection mark were visually checked. The dock retained its
+  earlier vertical anchor; its saved left-to-right order was preserved.
+- Three eligible non-dock recent apps hid the Recent apps section. Opening a fourth showed one MRU
+  row, and Down from the dock reached it.
+- Hold OK on a Recent apps tile opened its five-action glass menu. App info opened native TV Settings
+  for the selected app, and Home restored that Recent apps tile.
+- Uninstall opened Android's confirmation for VLC. Back cancelled it; VLC remained installed and the
+  exact dock, grid and hidden-shortcut snapshot remained unchanged. No uninstall was confirmed.
+- Inputs fitted all HDMI, AV and Live TV rows in a measured 220dp-wide popup and dismissed with Back.
+  The network shortcut opened native Network & Internet settings and returned through Home.
+
+The network pill displays the Wi-Fi fallback with validated connection status and an accessible
+"Network. Wi-Fi connected" description. Display of the actual SSID remains unverified: system
+Location repeatedly turns off shortly after enabling it. A controlled reproduction observed that
+reset before Home started, while the launcher was force-stopped; the reset's owner has not been
+identified. Other network states have source review, rather than end-to-end hardware replay. Casting,
+voice, account setup, pairing a replacement remote, factory reset and OTA installation remain untested
+end to end.
 
 An exhaustive independent navigation check passed 21,788 invariants across 130 layouts with zero to
 four recent apps and zero to 25 grid apps, including the absent-Recent section mapping. Targets and
@@ -128,7 +181,7 @@ fallback focus remained on dock/recent/grid/library items, canonical index round
 Down stopped and dock Up allowed the native header controls. This is a model check, separate from
 device rendering and D-pad validation.
 
-Run the identity and saved-layout model tests without an Android device:
+Run the pure Java model tests without an Android device:
 
 ```bash
 JAVA_HOME=/path/to/jdk-17 bash launcher/tests/run.sh
