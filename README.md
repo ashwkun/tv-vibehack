@@ -1,107 +1,158 @@
-# tv-vibehack
+# tv-vibehack — development fork
 
-**Your TV, minus the ads.** Debloat any Android TV / Google TV over ADB and give it a clean,
-tvOS-inspired launcher. Hand the prompt to Claude Code or any coding assistant, answer a few
-questions about which apps you use, and it does the rest on the real TV.
+A small native Android TV home screen with a black background, pinned dock, app grid and a floating
+glass focus highlight. This fork develops selected improvements from
+[Gathin23/tv-vibehack](https://github.com/Gathin23/tv-vibehack) while retaining its MIT license.
 
-| Stock home screen | After |
+| Original home screen | Upstream launcher |
 |---|---|
 | ![Stock Google TV home with a sponsored ad](docs/stock-home.jpg) | ![tvOS-style launcher](docs/new-home.jpg) |
 
-Everything is reversible: packages are disabled, never uninstalled, and a restore script puts the
-stock launcher back.
+The launcher has no Internet permission, downloads or background services. Device package changes
+are separate from the app and require a backup and a reviewed device-specific list.
 
-## Quick start
+## Development scope
 
-1. On the TV: Settings → Device Preferences → About → press OK on **Build** seven times → back →
-   Developer options → turn on **USB debugging** (and Network/ADB debugging if your TV shows it).
-   Keep the TV on and on the same Wi-Fi as your computer.
-2. Open Claude Code (or your assistant of choice) on your computer and paste the prompt from
-   [`PROMPT.md`](PROMPT.md), filling in your TV model.
-3. Accept the "Allow USB debugging?" prompt on the TV when told to, then answer the checklist
-   questions (which apps you use, which four go in the dock).
+Phase 1 focuses on app identity and focus restoration, accurate Network status, cancelling stale
+hero-title animations, accessibility, and safer build/install tooling. The Network button keeps a
+fixed label and reports connection status without reading the Wi-Fi name or requesting location.
+See [development notes and upstream credits](docs/development.md) for scope and validation status.
 
-That's it. The assistant backs up, debloats, builds and installs the launcher, and verifies each
-step with screenshots from the TV. If you'd rather do it by hand, the pieces are below.
+Remote dock editing and an installed-app library from upstream
+[PR #19](https://github.com/Gathin23/tv-vibehack/pull/19) are planned separately. The current dock and
+hidden apps remain configurable in
+[`config.xml`](launcher/app/src/main/res/values/config.xml); changing these defaults requires a rebuild.
 
-## What's in the repo
+## Connect the TV
 
-| Path | What it is |
-|---|---|
-| [`PROMPT.md`](PROMPT.md) | The prompt. Brand-neutral; the assistant discovers your TV's bloat. |
-| [`launcher/`](launcher/) | The tvOS-style launcher. Edit `app/src/main/res/values/config.xml` for your dock, hidden apps and Live TV package, then run `build-and-install.sh`. |
-| [`tools/tv.py`](tools/tv.py) | Pure-Python ADB client (shell, batch, push, pull). Works where the stock `adb` is blocked. |
-| [`tools/b64push.py`](tools/b64push.py) | Uploads larger files (APKs) as base64 chunks with an md5 check. |
-| [`tools/disable.sh`](tools/disable.sh), [`tools/restore.sh`](tools/restore.sh) | Apply or undo a debloat list. |
-| [`examples/`](examples/) | Per-TV debloat lists. Add yours, see [CONTRIBUTING.md](CONTRIBUTING.md). |
+Install Android SDK Platform-Tools. Keep the computer and TV on the same network and enable the TV's
+developer options and debugging. Android TV and Google TV menus vary by firmware.
 
-## The launcher
-
-A small native Android TV home screen (`com.gathin.tvhome`), built for sets with 1 GB of RAM:
-
-- Pitch-black background, like Apple TV 4K.
-- A dock at the bottom in a lighter rounded band with the four apps you choose. The shelf above
-  shows the focused dock app's name in large type with an ambient glow sampled from its banner.
-  Press Down and the dock slides up to reveal the rest of your apps in a grid.
-- One translucent glass highlight springs from tile to tile. The focused tile lifts and shows its
-  name.
-- Frosted pills top right: **Inputs** (a dropdown of HDMI ports, AV and Live TV), **Wi-Fi**
-  (shows the network name) and **Settings**. Greeting, a large thin clock and the date top left,
-  set in [Outfit](https://fonts.google.com/specimen/Outfit).
-- Deterministic D-pad navigation, last focused tile remembered, staggered entrance animation.
-  No blur, no video, no network, no background services.
-
-Configure it in [`launcher/app/src/main/res/values/config.xml`](launcher/app/src/main/res/values/config.xml):
-dock order, hidden apps, Live TV package and columns. Build and install with
+For **Wireless debugging**, open **Pair device with pairing code** on the TV:
 
 ```bash
-TV_HOST=192.168.1.50 launcher/build-and-install.sh
+adb pair 192.168.1.50:PAIRING_PORT
+# Enter the code shown on the TV when adb asks for it.
+adb connect 192.168.1.50:CONNECTION_PORT
+adb devices
 ```
 
-Needs JDK 17 and the Android SDK (platform 34, build-tools 34.0.0). On macOS:
-`brew install openjdk@17 android-commandlinetools && sdkmanager "platforms;android-34" "build-tools;34.0.0"`.
+The pairing port and connection port are different, and can change. Use the connection endpoint as
+`TV_SERIAL`. The native `adb` client supports this paired, encrypted connection.
 
-## Talking to the TV by hand
+Older TVs may expose **legacy network ADB** through USB/network debugging on port 5555:
 
 ```bash
-python3 -m venv tools/venv && tools/venv/bin/pip install -r tools/requirements.txt
-export TV_HOST=192.168.1.50                                   # your TV's IP
-tools/venv/bin/python -I tools/tv.py --probe                 # model, Android version, firmware
-tools/venv/bin/python -I tools/tv.py 'pm list packages'      # one command
-printf 'cmd1\ncmd2\n' | tools/venv/bin/python -I tools/tv.py --batch
-tools/disable.sh examples/xiaomi-mi-tv-4a/debloat.txt        # apply a list
-tools/restore.sh examples/xiaomi-mi-tv-4a/debloat.txt        # undo it, restore stock launcher
+adb connect 192.168.1.50:5555
 ```
 
-### Gotchas we hit
+Accept any authorization prompt on the TV. If macOS reports “No route to host,” check network access
+and the computer's Local Network privacy settings. The Python fallback below supports only legacy
+unencrypted ADB; it cannot replace native adb for a paired wireless-debugging connection.
 
-- **macOS: `adb connect` says "No route to host"** while the port is clearly open. Recent macOS
-  treats the Google-signed `adb` as its own app under Local Network privacy and silently blocks it.
-  `tools/tv.py` avoids the binary entirely.
-- **No "wireless debugging" toggle** on some TVs (Xiaomi among them). USB debugging alone opens
-  network ADB on port 5555.
-- **Chained `pm` commands** (`pm disable a; pm disable b`) may silently stop after the first. Run
-  one per shell call; `--batch` does this.
-- **Large pushes hang** through the Python client. Use `tools/b64push.py` for APKs.
-- **Disable the stock launcher only after the new one is installed**, or the Home button lands on
-  a factory test app.
-- **Third-party launchers** often charge for basics like a custom wallpaper. Hence `launcher/`.
-- **No on-screen keyboard** after switching launchers (seen on Xiaomi): the default input method
-  pointed at a Baidu IME that isn't installed. Fix with
-  `tools/tv.py 'ime set com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME'`.
+## Build and install
 
-## Supported TVs
+Install JDK 17, Android SDK platform 34, build-tools 34.0.0 and Platform-Tools. The build script prefers
+a registered JDK 17 on macOS, then common Homebrew/Linux JDK paths; an explicit `JAVA_HOME` takes
+precedence. SDK lookup uses `ANDROID_HOME`, `ANDROID_SDK_ROOT`, existing `local.properties`, then
+Android Studio's macOS/Linux defaults and common Homebrew paths. Existing SDK configuration is not
+overwritten.
 
-Anything running Android TV or Google TV: Xiaomi/Redmi, TCL, Hisense, Sony, OnePlus, Realme,
-Nvidia Shield and most others. Not Samsung Tizen, LG webOS or Amazon Fire TV (different OS, no ADB
-launcher replacement). Tested so far on the models in [`examples/`](examples/).
+From the repository root:
 
-## Contributing
+```bash
+TV_SERIAL=192.168.1.50:35709 bash launcher/build-and-install.sh
+```
 
-Add your TV's debloat list, improve the launcher, or sharpen the prompt. See
-[CONTRIBUTING.md](CONTRIBUTING.md).
+For legacy ADB, the compatible host form defaults to port 5555:
 
-## Licence
+```bash
+TV_HOST=192.168.1.50 bash launcher/build-and-install.sh
+# TV_PORT overrides 5555 for a legacy endpoint.
+```
 
-MIT, see [`LICENSE`](LICENSE). The Outfit typeface is under the SIL Open Font License, see
-`launcher/FONT-LICENSE-OFL.txt`.
+The script builds a **debug APK**, installs it with native adb, verifies that the launcher reaches the
+foreground, and selects `com.gathin.tvhome/.MainActivity` as Home. It checks both Android's resolved
+Home and the actual Home button. `TV_USER` defaults to `0` and must match the active Android user.
+No runtime permissions are granted by the script.
+
+The stock launcher stays enabled by default. If a tested new launcher needs the stock Home package
+disabled, name that package explicitly and opt in:
+
+```bash
+TV_SERIAL=192.168.1.50:35709 \
+  STOCK_LAUNCHER=com.google.android.apps.tv.launcherx DISABLE_STOCK=1 \
+  bash launcher/build-and-install.sh
+```
+
+This disables only the named stock launcher, after installation and launch succeed. It records the
+previous Home and stock package state under `backup/install-.../`. If Home still resolves elsewhere
+or the Home button fails, it attempts to restore those states and exits with an error. A failed
+installation never advances to stock disabling. The script **never disables setup/recovery helpers**;
+some firmware gives those helpers priority over third-party launchers, requiring a separate review.
+
+Set `STATE_DIR` to choose a new snapshot directory, or `ADB` to choose an adb executable. Snapshot
+directories contain device information and are ignored by Git. Keep them local.
+
+## Restore
+
+Restore the state from a particular build/install run:
+
+```bash
+TV_SERIAL=192.168.1.50:CURRENT_PORT \
+  STATE_DIR=backup/install-YYYYMMDD-HHMMSS-PID bash tools/restore.sh
+```
+
+The saved Home is the Home from **before that run**; it may already be the custom launcher. Stock
+package defaults and explicit enabled states are restored exactly when recorded. The script leaves
+app data, component overrides, animation settings and the installed custom launcher in place.
+
+To use a separate package-state backup, supply a JSON object such as
+`{"com.example.package": 0}` with the original Android enabled-state values:
+
+```bash
+TV_SERIAL=192.168.1.50:CURRENT_PORT \
+  PACKAGE_STATES=backup/package-states.json \
+  STOCK_LAUNCHER=com.google.android.apps.tv.launcherx bash tools/restore.sh
+```
+
+The older list interface is also available:
+
+```bash
+TV_SERIAL=192.168.1.50:CURRENT_PORT \
+  bash tools/restore.sh my-reviewed-debloat.txt com.google.android.apps.tv.launcherx
+```
+
+Without a recorded state, list entries are explicitly enabled and the script says so; this cannot
+reconstruct which apps were already disabled. Always capture original states before debloating.
+The script resolves the supplied stock package to a full Home component, verifies the selection and
+stops if firmware selects another app. It does not silently claim the original screen is restored.
+
+## Device changes and legacy tools
+
+[`PROMPT.md`](PROMPT.md) guides a device-specific backup, package review and launcher setup. Preserve
+TV/input playback, source menus, remote pairing, keyboards, accessibility, Play Store and Play
+Services. Review streaming, casting, voice and firmware-update services with the owner. Example
+debloat lists describe other models and are starting points, not universal recommendations.
+
+`tools/disable.sh` and the pure-Python `tools/tv.py` remain legacy utilities. `tv.py` prints remote
+shell output without propagating remote exit codes; `--batch` is **not a fail-fast installer**.
+
+```bash
+python3 -m venv tools/venv
+tools/venv/bin/pip install -r tools/requirements.txt
+TV_HOST=192.168.1.50 tools/venv/bin/python -I tools/tv.py --probe
+```
+
+The Python client's push/pull timeouts allow slow Wi-Fi transfers, and batch input accepts a UTF-8
+byte-order mark. `b64push.py` remains available for legacy uploads with an MD5 transfer check.
+Use native adb for paired TLS, installations and verified Home changes.
+
+For a screenshot, return Home before capturing. Some TV/HDMI or protected video surfaces cannot be
+captured. A screenshot alone does not prove voice search, casting or firmware updates work.
+
+## Contributing and license
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). The original project and this fork use MIT; retain
+[`LICENSE`](LICENSE). Outfit is licensed under SIL Open Font License in
+[`launcher/FONT-LICENSE-OFL.txt`](launcher/FONT-LICENSE-OFL.txt).

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Minimal ADB-over-TCP client for an Android TV using adb_shell (no adb binary needed).
+"""Legacy, unencrypted ADB-over-TCP client using adb_shell (no adb binary needed).
+
+For paired wireless debugging (TLS), use native adb with TV_SERIAL=IP:port.
+Shell output is printed as received; remote exit codes are not propagated.
 
 Set TV_HOST to the TV's IP. Usage:
     tv.py --probe                      connect and print model / Android version
@@ -52,10 +55,12 @@ def main():
         dev.push(args[1], args[2], transport_timeout_s=300.0, read_timeout_s=300.0)
         print(f"pushed {args[1]} -> {args[2]}")
     elif args[0] == "--pull" and len(args) == 3:
-        dev.pull(args[1], args[2])
+        dev.pull(args[1], args[2], transport_timeout_s=300.0, read_timeout_s=300.0)
         print(f"pulled {args[1]} -> {args[2]}")
     elif args[0] == "--batch":
-        # one shell command per stdin line, each run separately on the same connection
+        # One shell command per line. Drop the BOM PowerShell may prepend.
+        # This compatibility client does not check remote shell exit codes.
+        sys.stdin.reconfigure(encoding="utf-8-sig")
         for line in sys.stdin:
             line = line.strip()
             if not line or line.startswith("#"):
