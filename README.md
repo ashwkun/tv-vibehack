@@ -27,6 +27,12 @@ The header uses open, left-aligned typography: a small greeting, a large light c
 line underneath. Native text and clock views keep the layout lightweight, without blur or a new
 animation loop.
 
+Returning Home reuses app labels and artwork from an in-memory catalog. Package discovery and version
+checks run on one background worker; unchanged results leave the rows, focus and open menus alone.
+App installs, updates, removals, component changes and resource-configuration changes refresh the
+affected records. Recent opens update independently of package discovery. The cache is rebuilt after
+the launcher process or activity is recreated; it adds no service, polling or disk artwork cache.
+
 Hold **OK** on the network pill and choose **Show Wi-Fi name** to enable name access. Home explains
 Android's location permission before requesting it, then lets Android decide whether to reveal the
 name. Some TVs also require Location turned on; Home offers settings guidance when the name remains
@@ -56,8 +62,8 @@ All apps button is removed.
 ## Organize apps with the remote
 
 Hold **OK** on an app to open its actions. Choose **Reorder**, use the D-pad to move it within or between
-the dock and grid, then press **OK** to save or **Back** to cancel. Leaving the launcher or refreshing
-the installed-app list cancels an unfinished move. The on-screen hint and accessibility description
+the dock and grid, then press **OK** to save or **Back** to cancel. Leaving the launcher or a change to
+the installed-app catalog cancels an unfinished move. The on-screen hint and accessibility description
 identify move mode.
 
 App actions also offer dock replacement, removal from Home, App info and **Uninstall**. Removing a dock shortcut

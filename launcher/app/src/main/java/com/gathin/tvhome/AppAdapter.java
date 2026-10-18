@@ -5,8 +5,6 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -115,6 +113,8 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     private final RecentAppsState recentApps;
     private SectionNavigation sections;
     private final Map<String, Entry> available = new LinkedHashMap<>();
+    private final Map<String, AppCatalog.App> catalogApps = new LinkedHashMap<>();
+    private long catalogRevision = -1;
     private final List<Entry> items = new ArrayList<>();
     private final StableItemIds stableIds = new StableItemIds();
 
@@ -132,40 +132,53 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         setHasStableIds(true);
     }
 
-    void reload() {
-        if (beforeMove != null) {
+    boolean hasCatalog() { return catalogRevision >= 0; }
+
+    boolean matchesCatalog(AppCatalog.Snapshot snapshot) { return catalogRevision == snapshot.revision; }
+
+    /** Only changed catalog records get new view-owned drawables. Called on the main thread. */
+    boolean applyCatalog(AppCatalog.Snapshot snapshot) {
+        if (matchesCatalog(snapshot)) return false;
+        boolean cancelledMove = beforeMove != null;
+        if (cancelledMove) {
             layout = beforeMove;
             beforeMove = null;
             movingKey = null;
         }
-        PackageManager pm = ctx.getPackageManager();
-        Intent probe = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
-        List<ResolveInfo> tvApps = pm.queryIntentActivities(probe, 0);
-        List<ResolveInfo> found = new ArrayList<>(tvApps);
-        found.addAll(pm.queryIntentActivities(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0));
+        Map<String, Entry> next = new LinkedHashMap<>();
+        Map<String, AppCatalog.App> records = new LinkedHashMap<>();
+        SharedPreferences.Editor labels = null;
         Set<String> tvPackages = new HashSet<>();
-        for (ResolveInfo info : tvApps) if (info.activityInfo != null) tvPackages.add(info.activityInfo.packageName);
-        available.clear();
-        SharedPreferences.Editor labels = layoutPreferences.edit();
-        for (ResolveInfo ri : found) {
-            if (ri.activityInfo == null) continue;
-            String pkg = ri.activityInfo.packageName;
-            if (pkg.equals(ctx.getPackageName()) || available.containsKey(pkg) || !ri.activityInfo.exported) continue;
-            ComponentName component = new ComponentName(pkg, ri.activityInfo.name);
-            Drawable banner = ri.activityInfo.loadBanner(pm);
-            if (banner == null) banner = ri.activityInfo.applicationInfo.loadBanner(pm);
-            Drawable icon = ri.loadIcon(pm);
-            String label = String.valueOf(ri.loadLabel(pm));
-            available.put(pkg, new Entry(label, component, banner, icon));
-            labels.putString("label:" + pkg, label);
+        for (AppCatalog.App app : snapshot.apps) {
+            Entry entry = catalogApps.get(app.pkg) == app ? available.get(app.pkg) : null;
+            if (entry == null) {
+                entry = new Entry(app.label, app.component, app.newBanner(ctx.getResources()), app.newIcon(ctx.getResources()));
+                if (!app.label.equals(layoutPreferences.getString("label:" + app.pkg, null))) {
+                    if (labels == null) labels = layoutPreferences.edit();
+                    labels.putString("label:" + app.pkg, app.label);
+                }
+            }
+            next.put(app.pkg, entry);
+            records.put(app.pkg, app);
+            if (app.television) tvPackages.add(app.pkg);
         }
-        labels.apply();
-        List<Entry> alphabetic = libraryEntries();
+        if (labels != null) labels.apply();
+        available.clear();
+        available.putAll(next);
+        catalogApps.clear();
+        catalogApps.putAll(records);
+        catalogRevision = snapshot.revision;
         List<String> defaults = new ArrayList<>();
-        for (Entry app : alphabetic) if (tvPackages.contains(app.pkg)) defaults.add(app.pkg);
+        for (Entry app : libraryEntries()) if (tvPackages.contains(app.pkg)) defaults.add(app.pkg);
+        List<String> oldGrid = layout.grid();
         layout.reconcileDefaultApps(defaults);
-        saveLayout();
-        rebuildItems();
+        if (!oldGrid.equals(layout.grid())) saveLayout();
+        return rebuildItems(cancelledMove);
+    }
+
+    /** MRU updates do not require discovering packages or loading their artwork again. */
+    boolean refreshRecentApps() {
+        return hasCatalog() && rebuildItems(false);
     }
 
     private List<String> readList(String key, List<String> fallback) {
@@ -188,19 +201,21 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
                 .putString("hidden", new JSONArray(layout.hidden()).toString()).apply();
     }
 
-    private void rebuildItems() {
-        items.clear();
+    private void rebuildItems() { rebuildItems(true); }
+
+    private boolean rebuildItems(boolean force) {
+        List<Entry> next = new ArrayList<>();
         List<String> dock = layout.dock();
         for (int slot = 0; slot < dockSize; slot++) {
             String pkg = dock.get(slot);
             Entry app = available.get(pkg);
             if (pkg.isEmpty()) {
-                items.add(new Entry(ctx.getString(R.string.add_app), "", Entry.EMPTY, HomeLayoutState.emptySlotKey(slot)));
+                next.add(new Entry(ctx.getString(R.string.add_app), "", Entry.EMPTY, HomeLayoutState.emptySlotKey(slot)));
             } else if (app != null) {
-                items.add(app);
+                next.add(app);
             } else {
                 String label = layoutPreferences.getString("label:" + pkg, null);
-                items.add(new Entry(label == null ? ctx.getString(R.string.unavailable_app)
+                next.add(new Entry(label == null ? ctx.getString(R.string.unavailable_app)
                         : ctx.getString(R.string.unavailable_dock_app, label), pkg,
                         Entry.UNAVAILABLE, HomeLayoutState.unavailablePinKey(pkg)));
             }
@@ -210,13 +225,27 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         List<String> grid = layout.visibleGrid(available.keySet());
         sections = new SectionNavigation(dockSize, recent.size(), grid.size());
         if (!recent.isEmpty()) {
-            items.add(new Entry(ctx.getString(R.string.recent_apps), "", Entry.RECENT_HEADER, "section:recent"));
-            for (String pkg : recent) items.add(new Entry(available.get(pkg)));
+            next.add(new Entry(ctx.getString(R.string.recent_apps), "", Entry.RECENT_HEADER, "section:recent"));
+            for (String pkg : recent) next.add(new Entry(available.get(pkg)));
         }
-        items.add(new Entry(ctx.getString(R.string.all_apps), "", Entry.ALL_HEADER, "section:all-apps"));
-        for (String pkg : grid) items.add(available.get(pkg));
-        items.add(new Entry(ctx.getString(R.string.app_library), "", Entry.LIBRARY, HomeLayoutState.libraryKey()));
+        next.add(new Entry(ctx.getString(R.string.all_apps), "", Entry.ALL_HEADER, "section:all-apps"));
+        for (String pkg : grid) next.add(available.get(pkg));
+        next.add(new Entry(ctx.getString(R.string.app_library), "", Entry.LIBRARY, HomeLayoutState.libraryKey()));
+        if (!force && sameRows(items, next)) return false;
+        items.clear();
+        items.addAll(next);
         notifyDataSetChanged();
+        return true;
+    }
+
+    private static boolean sameRows(List<Entry> before, List<Entry> after) {
+        if (before.size() != after.size()) return false;
+        for (int i = 0; i < before.size(); i++) {
+            Entry a = before.get(i), b = after.get(i);
+            if (a.kind != b.kind || !a.key.equals(b.key) || !a.label.equals(b.label)
+                    || a.banner != b.banner || a.icon != b.icon) return false;
+        }
+        return true;
     }
 
     List<Entry> libraryEntries() {

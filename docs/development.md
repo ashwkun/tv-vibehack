@@ -54,9 +54,9 @@ retains phase-1 focus and network behavior while using a separate saved-layout m
   activities. Users can open an app, edit its Home shortcut, choose a dock slot, open App info or request
   uninstall through Android's confirmation.
 - Reorder stages a copy of the saved layout, supports dock/grid moves, and exposes persistent instructions
-  and an accessibility description. OK saves; Back cancels. Leaving the activity or refreshing packages
-  cancels an unfinished move. Begin/end rebinding also clears stale moving descriptions.
-- Package refresh dismisses stale menus. Reorder resolves the selected app's current key instead of a
+  and an accessibility description. OK saves; Back cancels. Leaving the activity or an actual catalog
+  change cancels an unfinished move. Begin/end rebinding also clears stale moving descriptions.
+- A changed package catalog dismisses stale menus. Reorder resolves the selected app's current key instead of a
   captured position. A separate visual-row navigation model skips section headings,
   while reorder operations map to canonical dock/grid indices. Down visits a partial final row before
   the library; footer navigation cannot target decoration rows.
@@ -70,6 +70,32 @@ retains phase-1 focus and network behavior while using a separate saved-layout m
 - App actions, library choices and dock pickers use native list views with a shared glass-panel drawable
   and focus states. The styling adds no blur, snapshot capture, frame callback, dependency or service.
   System uninstall/Settings UI remains controlled by Android.
+
+## App catalog and Home returns
+
+`AppCatalog` owns an in-memory snapshot and one serial background executor for the activity's lifetime.
+It retains only the application context. PackageManager discovery, version checks and artwork loading
+run off the main thread. Returning Home applies an available snapshot immediately and refreshes the
+catalog in the background. A fresh activity/process still needs an initial background load.
+
+`AppCatalogCache` keys loaded records by package, selected component, long version code and last-update
+time, within the current resource configuration. Locale, density, UI mode and other resource qualifiers
+invalidate the configuration; a configuration sequence number alone does not. Broadcasts invalidate
+the affected package before a debounced refresh. A resume scan detects installs, updates, removals and
+component availability changes missed while paused. A package disappearing during discovery gets one
+bounded retry; failed scans retain the previous complete snapshot.
+
+Loaded records contain cloneable Drawable state. The adapter creates its own Drawable instances only
+for changed records and retains unchanged entries, including their sampled ambient colors. Removed
+components are pruned after a successful scan. There is no disk artwork cache, dependency, service or
+periodic poller. Executor shutdown, request generations and configuration checks reject stale work and
+callbacks after activity destruction or superseding requests.
+
+Unchanged catalog revisions do not rebind rows, dismiss menus, cancel Reorder or restore stale focus.
+Launcher-local recent opens can change rows independently. An actual catalog change cancels staged
+edits, dismisses captured app actions and restores the latest stable focus key. On the first load,
+automatic header focus does not override the saved tile; deliberate header navigation takes precedence
+over a pending restore. Existing entrance effects run only when rows actually change.
 
 ## Recent apps and section navigation
 
@@ -131,6 +157,31 @@ Android API 34 and includes the associated compatibility fixes. No new Internet 
 downloading, blur or background service is planned in this phase.
 
 ## Validation
+
+Debug build 13 (`2.4.0`) passes `assembleDebug`, `lintDebug` (zero errors, 21 warnings) and all five
+pure Java suites. The added cache suite covers identity/version/update-time changes, package-wide
+invalidation, configuration round trips, superseded scans and removal pruning. Independent source
+review covered callback/lifecycle guards, Drawable ownership, recent-row updates and unchanged-row
+suppression.
+
+Cache checks on the same Android 14 TV established:
+
+- Repeated warm Home returns kept one catalog revision and reused all 23 records, with zero artwork
+  loads. Discovery/version checks ran on the catalog worker.
+- Installing a private fixture loaded one new record and reused 23. Updating it while Home was paused
+  changed its label, banner and exported launch component on return, again loading one record.
+- Disabling/re-enabling only that fixture removed/restored its tile; uninstalling it removed the tile
+  without reloading the other 23 apps. The fixture and its temporary saved-layout entries were removed.
+- Before the fixture checks, the exact saved dock, grid and hidden-app arrays matched the pre-update
+  snapshot. Cleanup retained those arrays. No system package or Location setting was changed.
+
+An atrace comparison used 18 native Network settings-to-Home returns per build, discarding the first
+three as warmups. Across the remaining 15 samples, main-thread framework `activityResume` elapsed
+time fell from a median 124.5 ms to 43.8 ms; P90 fell from 416.1 ms to 114.7 ms. These are resume-path
+wall times, not remote-input-to-visible-frame measurements. The cache build was measured before the
+final cold-start focus guard; that guard does not alter the warm catalog path. The final APK was
+installed, but its cold-start focus recheck ended when the TV returned to active use. Screenshots,
+traces, fixture sources/APKs and the parser remain private verification artifacts.
 
 On 18 October 2026, debug build 12 (`2.3.6`) passed `assembleDebug` and `lintDebug` with zero errors
 and 21 warnings. Hardware checks used a MiTV-MZTU0 running Android 14. Build and lint results remain

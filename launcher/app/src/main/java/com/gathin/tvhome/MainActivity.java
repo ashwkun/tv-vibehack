@@ -10,6 +10,7 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
@@ -29,6 +30,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Trace;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -81,6 +83,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
     private String liveTvPkg;
 
     private AppAdapter adapter;
+    private AppCatalog appCatalog;
+    private int catalogRequestGeneration;
+    private boolean restoreInitialFocus = true;
     private RecyclerView grid;
     private FrameLayout root;
     private GlassView glass;
@@ -162,6 +167,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
             // An update removes then immediately replaces the same package. Refresh after replacement.
             if (Intent.ACTION_PACKAGE_REMOVED.equals(intent.getAction())
                     && intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return;
+            if (appCatalog != null && intent.getData() != null) {
+                String pkg = intent.getData().getSchemeSpecificPart();
+                if (pkg != null && !pkg.isEmpty()) appCatalog.invalidatePackage(pkg);
+            }
             handler.removeCallbacks(packageRefresh);
             if (resumed) handler.postDelayed(packageRefresh, 150L);
         }
@@ -217,6 +226,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
         grid.addItemDecoration(new DockDecoration(COLUMNS, density));
         grid.setLayoutAnimation(new LayoutAnimationController(
                 AnimationUtils.loadAnimation(this, R.anim.tile_enter), 0.06f));
+        appCatalog = new AppCatalog(this);
         adapter = new AppAdapter(this, this, COLUMNS);
         appMenu = new AppMenu(this, adapter, COLUMNS, this);
         ((GridLayoutManager) grid.getLayoutManager()).setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
@@ -306,10 +316,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
         heroShown = false;
         heroName.setAlpha(0f);
         ambient.setAlpha(0f);
+        registerPackageReceiver();
         refreshApps(true);
         updateGreeting();
         startNetworkMonitoring();
-        registerPackageReceiver();
         handler.postDelayed(minuteTick, MINUTE_MS);
     }
 
@@ -319,6 +329,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
         resumed = false;
         cancelGridConfirm();
         refreshGeneration++;
+        catalogRequestGeneration++;
         restoringFocus = false;
         cancelPendingFocus();
         cancelHeroAnimations();
@@ -335,6 +346,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
     }
 
     @Override
+    protected void onDestroy() {
+        if (appCatalog != null) appCatalog.close();
+        super.onDestroy();
+    }
+
+    @Override
+    public void onConfigurationChanged(@NonNull Configuration configuration) {
+        super.onConfigurationChanged(configuration);
+        if (resumed) refreshApps(false);
+    }
+
+    @Override
     public void onBackPressed() {
         if (adapter.isMoving()) onMoveFinished(false);
         else if (appsExpanded || adapter.positionOfKey(pendingFocusKey) >= COLUMNS) focusDock();
@@ -344,6 +367,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
         if (packageReceiverRegistered) return;
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_PACKAGE_ADDED);
+        filter.addAction(Intent.ACTION_PACKAGE_REPLACED);
         filter.addAction(Intent.ACTION_PACKAGE_REMOVED);
         filter.addAction(Intent.ACTION_PACKAGE_CHANGED);
         filter.addDataScheme("package");
@@ -355,10 +379,32 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
         packageReceiverRegistered = true;
     }
 
-    private void refreshApps(boolean animateEntrance) {
-        appMenu.dismiss();
+    private void refreshApps(boolean returningHome) {
+        // Warm Home can use its existing catalog immediately. MRU state is launcher-local.
+        AppCatalog.Snapshot cached = appCatalog.snapshot();
+        if (returningHome && (cached != null || adapter.hasCatalog())) {
+            applyApps(cached, true, true);
+        }
+        final int request = ++catalogRequestGeneration;
+        appCatalog.refresh(snapshot -> {
+            if (!resumed || request != catalogRequestGeneration || adapter.matchesCatalog(snapshot)) return;
+            applyApps(snapshot, returningHome && !adapter.hasCatalog(), false);
+        });
+    }
+
+    private void applyApps(AppCatalog.Snapshot snapshot, boolean animateEntrance, boolean restoreOnResume) {
+        boolean changedCatalog = snapshot != null && !adapter.matchesCatalog(snapshot);
+        if (!changedCatalog && !restoreOnResume) return;
+        // Only an actual catalog change invalidates menus, staged edits and captured app actions.
+        if (changedCatalog) {
+            appMenu.dismiss();
+            cancelGridConfirm();
+        }
         View focused = getCurrentFocus();
-        boolean restoreTile = returnFocusKey != null || pendingFocusKey != null || focused == null
+        // An empty first frame can give Inputs automatic focus before the async catalog arrives.
+        // Restore saved tile focus unless the user deliberately navigated the header while loading.
+        boolean restoreTile = (!adapter.hasCatalog() && restoreInitialFocus)
+                || returnFocusKey != null || pendingFocusKey != null || focused == null
                 || focused == grid || focused.getId() == R.id.card;
         String selectedKey = returnFocusKey != null ? returnFocusKey
                 : pendingFocusKey != null ? pendingFocusKey : lastFocusedKey;
@@ -371,12 +417,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
             }
         }
         final String keyToRestore = selectedKey;
+        restoreInitialFocus = false;
         returnFocusKey = null;
         final int generation = ++refreshGeneration;
         cancelPendingFocus();
         restoringFocus = true;
-        adapter.reload();
-        if (animateEntrance) grid.scheduleLayoutAnimation();
+        Trace.beginSection("Home.applyCatalog");
+        boolean changedRows;
+        try {
+            changedRows = changedCatalog ? adapter.applyCatalog(snapshot) : adapter.refreshRecentApps();
+        } finally {
+            Trace.endSection();
+        }
+        if (animateEntrance && changedRows) grid.scheduleLayoutAnimation();
         updateMoveInstructions();
         grid.post(() -> {
             if (!resumed || generation != refreshGeneration) return;
@@ -547,6 +600,30 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         int code = event.getKeyCode();
+        boolean confirm = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER
+                || code == KeyEvent.KEYCODE_NUMPAD_ENTER;
+        boolean arrow = code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN
+                || code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT;
+        if (event.getAction() == KeyEvent.ACTION_DOWN
+                && (confirm || arrow || code == KeyEvent.KEYCODE_TAB || code == KeyEvent.KEYCODE_BACK)) {
+            // Explicit navigation wins over a catalog restore queued earlier in this UI loop.
+            if (restoringFocus) {
+                refreshGeneration++;
+                restoringFocus = false;
+            }
+        }
+        if (adapter != null && !adapter.hasCatalog() && event.getAction() == KeyEvent.ACTION_DOWN) {
+            if (code == KeyEvent.KEYCODE_DPAD_DOWN) {
+                restoreInitialFocus = true;
+                returnFocusKey = lastDockKey;
+            } else if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_LEFT
+                    || code == KeyEvent.KEYCODE_DPAD_RIGHT || code == KeyEvent.KEYCODE_TAB
+                    || code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER
+                    || code == KeyEvent.KEYCODE_NUMPAD_ENTER || code == KeyEvent.KEYCODE_BACK) {
+                restoreInitialFocus = false;
+                returnFocusKey = null;
+            }
+        }
         if (code == KeyEvent.KEYCODE_TAB && event.getAction() == KeyEvent.ACTION_DOWN) {
             cancelGridConfirm();
             if (pendingFocusKey != null) {
@@ -555,8 +632,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
             }
             return super.dispatchKeyEvent(event);
         }
-        boolean confirm = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER
-                || code == KeyEvent.KEYCODE_NUMPAD_ENTER;
         if (confirm) {
             if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
                 ignoredConfirmKeyCode = KeyEvent.KEYCODE_UNKNOWN;
@@ -582,8 +657,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
                 return event.dispatch(gridConfirmCallback, gridConfirmState, this);
             }
         }
-        boolean arrow = code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN
-                || code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT;
         if (arrow && isGridKeyContext()) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
                 cancelGridConfirm();
@@ -598,6 +671,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
     @Override
     public boolean dispatchTouchEvent(MotionEvent event) {
         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            if (restoringFocus) {
+                refreshGeneration++;
+                restoringFocus = false;
+            }
+            if (adapter != null && !adapter.hasCatalog()) {
+                restoreInitialFocus = false;
+                returnFocusKey = null;
+            }
             cancelGridConfirm();
             if (grid != null) {
                 cancelPendingFocus();
