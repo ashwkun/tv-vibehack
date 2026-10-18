@@ -2,8 +2,11 @@ package com.gathin.tvhome;
 
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
@@ -14,8 +17,7 @@ import android.media.tv.TvInputManager;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
-import android.net.wifi.WifiInfo;
-import android.net.wifi.WifiManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -44,6 +46,7 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * tvOS style home: black, a pinned dock row, an app grid, and one glass highlight that springs between tiles.
@@ -66,18 +69,49 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean heroShown;
     private TextView greeting;
     private TextView btnWifi;
+    private TextView networkStatus;
+    private View btnAllApps;
     private SpringAnimation springX, springY;
     private float glassTargetX, glassTargetY;
     private boolean glassShown;
     private int lastFocused = 0;
+    private String lastFocusedKey;
+    private String lastDockKey;
+    private SharedPreferences preferences;
+    private boolean appsExpanded;
+    private boolean resumed;
+    private boolean restoringFocus;
+    private boolean packageReceiverRegistered;
+    private int refreshGeneration;
+    private int focusGeneration;
+    private int heroGeneration;
+    private RecyclerView.OnScrollListener pendingFocusListener;
+    private PopupWindow inputsPopup;
+    private ConnectivityManager connectivityManager;
+    private ConnectivityManager.NetworkCallback networkCallback;
+    private Network defaultNetwork;
+    private NetworkCapabilities defaultNetworkCapabilities;
     private float density;
+
+    private final BroadcastReceiver packageReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            // An update removes then immediately replaces the same package. Refresh after replacement.
+            if (Intent.ACTION_PACKAGE_REMOVED.equals(intent.getAction())
+                    && intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return;
+            handler.removeCallbacks(packageRefresh);
+            if (resumed) handler.postDelayed(packageRefresh, 150L);
+        }
+    };
+    private final Runnable packageRefresh = () -> {
+        if (resumed) refreshApps(false);
+    };
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable minuteTick = new Runnable() {
         @Override
         public void run() {
             updateGreeting();
-            updateWifiLabel();
             handler.postDelayed(this, MINUTE_MS);
         }
     };
@@ -89,6 +123,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         density = getResources().getDisplayMetrics().density;
         COLUMNS = Math.max(1, getResources().getInteger(R.integer.columns));
         liveTvPkg = getString(R.string.live_tv_package).trim();
+        preferences = getSharedPreferences("home_state", MODE_PRIVATE);
+        lastFocusedKey = preferences.getString("focused_component", null);
+        lastDockKey = preferences.getString("dock_component", null);
 
         root = findViewById(R.id.root);
         glass = findViewById(R.id.glass);
@@ -102,6 +139,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 ambientGlow.setGradientRadius((r - l) * 0.62f));
         greeting = findViewById(R.id.greeting);
         btnWifi = findViewById(R.id.btnWifi);
+        networkStatus = findViewById(R.id.networkStatus);
+        btnAllApps = findViewById(R.id.btnAllApps);
+        btnWifi.setText(R.string.network);
 
         grid = findViewById(R.id.grid);
         grid.setLayoutManager(new GridLayoutManager(this, COLUMNS));
@@ -116,7 +156,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // tvOS layout: push the dock row to the bottom of the screen; the grid hides below until you press Down.
         grid.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             int h = b - t;
-            int dockRow = (int) ((145 + 6 + 12) * density);   // item height plus DockDecoration offsets
+            int dockRow = Math.round(164 * density);
+            RecyclerView.ViewHolder dock = grid.findViewHolderForAdapterPosition(0);
+            if (dock != null && grid.getLayoutManager() != null) {
+                dockRow = grid.getLayoutManager().getDecoratedMeasuredHeight(dock.itemView);
+            }
             int want = Math.max(0, h - dockRow - (int) (30 * density));
             if (grid.getPaddingTop() != want) {
                 grid.setPadding(grid.getPaddingLeft(), want, grid.getPaddingRight(), grid.getPaddingBottom());
@@ -144,14 +188,31 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         View btnInputs = findViewById(R.id.btnInputs);
         View btnSettings = findViewById(R.id.btnSettings);
         btnInputs.setOnClickListener(v -> showInputs());
-        btnWifi.setOnClickListener(v -> open(new Intent(Settings.ACTION_WIFI_SETTINGS)));
+        btnWifi.setOnClickListener(v -> openNetworkSettings());
         btnSettings.setOnClickListener(v -> open(new Intent(Settings.ACTION_SETTINGS)));
+        btnAllApps.setOnClickListener(v -> expandApps());
+        btnAllApps.setOnKeyListener((v, keyCode, event) -> {
+            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                focusDock();
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                expandApps();
+                return true;
+            }
+            return keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT;
+        });
 
         // Keep focus on the top bar at its ends and at the top: Android's focus finder would otherwise
         // jump to a tile far below when there is nothing in that direction.
         View.OnKeyListener pillKeys = (v, keyCode, event) -> {
             if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return true;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                focusDock();
+                return true;
+            }
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && v.getId() == R.id.btnInputs) return true;
             return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == R.id.btnSettings;
         };
@@ -162,48 +223,118 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // Hide the glass when focus leaves the tiles.
         getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
             boolean onTile = newF != null && newF.getId() == R.id.card;
-            if (!onTile) hideGlass();
+            if (!onTile) {
+                hideGlass();
+                if (newF != null) cancelPendingFocus();
+            }
         });
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
+        cancelHeroAnimations();
         glassShown = false;
         glass.setAlpha(0f);
         heroShown = false;
         heroName.setAlpha(0f);
         ambient.setAlpha(0f);
-        adapter.reload();
-        grid.scheduleLayoutAnimation();
+        refreshApps(true);
         updateGreeting();
-        updateWifiLabel();
+        startNetworkMonitoring();
+        registerPackageReceiver();
         handler.postDelayed(minuteTick, MINUTE_MS);
-
-        // Return to the tile we left from, or the first one.
-        grid.post(() -> {
-            View focused = getCurrentFocus();
-            if (focused != null && grid.findContainingViewHolder(focused) != null) return;
-            focusTile(lastFocused);
-        });
     }
 
     @Override
     protected void onPause() {
         super.onPause();
+        resumed = false;
+        refreshGeneration++;
+        restoringFocus = false;
+        cancelPendingFocus();
+        cancelHeroAnimations();
+        if (inputsPopup != null) inputsPopup.dismiss();
+        stopNetworkMonitoring();
+        if (packageReceiverRegistered) {
+            unregisterReceiver(packageReceiver);
+            packageReceiverRegistered = false;
+        }
         handler.removeCallbacks(minuteTick);
+        handler.removeCallbacks(packageRefresh);
     }
 
     @Override
     public void onBackPressed() {
-        // Home screen: Back goes nowhere.
+        if (appsExpanded) focusDock();
+    }
+
+    private void registerPackageReceiver() {
+        if (packageReceiverRegistered) return;
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_PACKAGE_ADDED);
+        filter.addAction(Intent.ACTION_PACKAGE_REMOVED);
+        filter.addAction(Intent.ACTION_PACKAGE_CHANGED);
+        filter.addDataScheme("package");
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(packageReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(packageReceiver, filter);
+        }
+        packageReceiverRegistered = true;
+    }
+
+    private void refreshApps(boolean animateEntrance) {
+        View focused = getCurrentFocus();
+        boolean restoreTile = focused == null || focused.getId() == R.id.card;
+        String selectedKey = lastFocusedKey;
+        if (!restoringFocus && focused != null && focused.getId() == R.id.card) {
+            RecyclerView.ViewHolder holder = grid.findContainingViewHolder(focused);
+            if (holder != null) {
+                String key = adapter.keyAt(holder.getBindingAdapterPosition());
+                if (key != null) selectedKey = key;
+            }
+        }
+        final String keyToRestore = selectedKey;
+        final int generation = ++refreshGeneration;
+        cancelPendingFocus();
+        restoringFocus = true;
+        adapter.reload();
+        if (animateEntrance) grid.scheduleLayoutAnimation();
+        updateAllAppsVisibility();
+        grid.post(() -> {
+            if (!resumed || generation != refreshGeneration) return;
+            restoringFocus = false;
+            if (restoreTile) {
+                int position = adapter.positionOfKey(keyToRestore);
+                focusTile(position != RecyclerView.NO_POSITION ? position : lastFocused);
+            }
+        });
     }
 
     // ---- glass highlight -------------------------------------------------------------------------
 
     @Override
     public void onTileFocused(int position, View card) {
+        if (restoringFocus) return;
         lastFocused = position;
+        String key = adapter.keyAt(position);
+        if (key != null) {
+            SharedPreferences.Editor editor = null;
+            if (!key.equals(lastFocusedKey)) {
+                lastFocusedKey = key;
+                editor = preferences.edit().putString("focused_component", key);
+            }
+            if (position < COLUMNS && !key.equals(lastDockKey)) {
+                lastDockKey = key;
+                if (editor == null) editor = preferences.edit();
+                editor.putString("dock_component", key);
+            }
+            if (editor != null) editor.apply();
+        }
+        appsExpanded = position >= COLUMNS;
+        updateAllAppsVisibility();
         // Tile rect in root coordinates, using layout positions (ignores the scale animation).
         Rect r = new Rect(0, 0, card.getWidth(), card.getHeight());
         root.offsetDescendantRectToMyCoords(card, r);
@@ -255,6 +386,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         int color = adapter.ambientColorAt(position);
         float y = dockTopInRoot - 14 * density - 26 * density - heroName.getHeight();
         boolean changed = !label.contentEquals(heroName.getText());
+        cancelHeroAnimations();
+        final int generation = heroGeneration;
 
         if (!heroShown) {
             heroName.setText(label);
@@ -266,6 +399,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             heroShown = true;
         } else if (changed) {
             heroName.animate().alpha(0f).translationX(-12 * density).setDuration(120).withEndAction(() -> {
+                if (generation != heroGeneration || !heroShown) return;
                 heroName.setText(label);
                 heroName.setY(y);
                 heroName.setTranslationX(12 * density);
@@ -273,13 +407,26 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }).start();
             if (color != ambientColor) {
                 ambient.animate().alpha(0.35f).setDuration(200).withEndAction(() -> {
+                    if (generation != heroGeneration || !heroShown) return;
                     setAmbient(color);
                     ambient.animate().alpha(1f).setDuration(500).start();
                 }).start();
+            } else {
+                ambient.animate().alpha(1f).setDuration(200).start();
             }
         } else {
             heroName.setY(y);
+            heroName.setTranslationX(0f);
+            heroName.setAlpha(1f);
+            setAmbient(color);
+            ambient.setAlpha(1f);
         }
+    }
+
+    private void cancelHeroAnimations() {
+        heroGeneration++;
+        heroName.animate().cancel();
+        ambient.animate().cancel();
     }
 
     private void setAmbient(int color) {
@@ -289,6 +436,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     private void hideHero() {
+        cancelHeroAnimations();
         if (!heroShown) return;
         heroShown = false;
         heroName.animate().alpha(0f).setDuration(160).start();
@@ -320,25 +468,72 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     private void focusTile(int position) {
+        cancelPendingFocus();
+        grid.stopScroll();
         if (adapter.getItemCount() == 0) return;
         final int pos = Math.max(0, Math.min(position, adapter.getItemCount() - 1));
+        final String key = adapter.keyAt(pos);
+        final int generation = focusGeneration;
         RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(pos);
         if (vh != null) {
-            vh.itemView.findViewById(R.id.card).requestFocus();
+            focusCard(vh.itemView.findViewById(R.id.card), pos);
             return;
         }
         // Not laid out yet: scroll there, then focus once the scroll settles.
-        grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
+        pendingFocusListener = new RecyclerView.OnScrollListener() {
             @Override
             public void onScrollStateChanged(@NonNull RecyclerView rv, int newState) {
                 if (newState != RecyclerView.SCROLL_STATE_IDLE) return;
-                rv.removeOnScrollListener(this);
-                RecyclerView.ViewHolder h = rv.findViewHolderForAdapterPosition(pos);
-                View target = h != null ? h.itemView.findViewById(R.id.card) : rv.getChildAt(0);
-                if (target != null) target.requestFocus();
+                completePendingFocus(generation, key);
             }
-        });
+        };
+        grid.addOnScrollListener(pendingFocusListener);
         grid.smoothScrollToPosition(pos);
+        // Handles a target laid out without entering a scrolling state.
+        grid.post(() -> {
+            if (grid.getScrollState() == RecyclerView.SCROLL_STATE_IDLE) completePendingFocus(generation, key);
+        });
+    }
+
+    private void completePendingFocus(int generation, String key) {
+        if (!resumed || generation != focusGeneration || pendingFocusListener == null) return;
+        int position = adapter.positionOfKey(key);
+        if (position == RecyclerView.NO_POSITION) {
+            cancelPendingFocus();
+            return;
+        }
+        RecyclerView.ViewHolder holder = grid.findViewHolderForAdapterPosition(position);
+        if (holder == null) return;
+        cancelPendingFocus();
+        focusCard(holder.itemView.findViewById(R.id.card), position);
+    }
+
+    private void focusCard(View card, int position) {
+        boolean alreadyFocused = card.hasFocus();
+        boolean focused = card.requestFocus();
+        if (!focused) focused = card.requestFocusFromTouch();
+        if (focused && alreadyFocused) onTileFocused(position, card);
+    }
+
+    private void cancelPendingFocus() {
+        focusGeneration++;
+        if (pendingFocusListener != null) {
+            grid.removeOnScrollListener(pendingFocusListener);
+            pendingFocusListener = null;
+        }
+    }
+
+    private void focusDock() {
+        int position = adapter.positionOfKey(lastDockKey);
+        focusTile(position >= 0 && position < COLUMNS ? position : 0);
+    }
+
+    private void expandApps() {
+        if (adapter.getItemCount() > COLUMNS) focusTile(COLUMNS);
+    }
+
+    private void updateAllAppsVisibility() {
+        btnAllApps.setVisibility(!appsExpanded && adapter.getItemCount() > COLUMNS ? View.VISIBLE : View.INVISIBLE);
     }
 
     // ---- top bar ---------------------------------------------------------------------------------
@@ -354,53 +549,129 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         greeting.setText(res);
     }
 
-    /** Shows the Wi-Fi network name on the button when we can read it, otherwise the connection type. */
-    private void updateWifiLabel() {
-        String text = getString(R.string.wifi);
-        try {
-            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-            Network net = cm != null ? cm.getActiveNetwork() : null;
-            NetworkCapabilities caps = net != null ? cm.getNetworkCapabilities(net) : null;
-            if (caps == null) {
-                text = getString(R.string.offline);
-            } else if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
-                text = getString(R.string.ethernet);
-            } else if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
-                WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-                WifiInfo info = wm != null ? wm.getConnectionInfo() : null;
-                String ssid = info != null ? info.getSSID() : null;
-                if (ssid != null) {
-                    ssid = ssid.replace("\"", "").trim();
-                    if (!ssid.isEmpty() && !ssid.contains("unknown") && !ssid.equals("0x")) text = ssid;
-                }
-            }
-        } catch (Exception ignored) {
+    private void startNetworkMonitoring() {
+        if (networkCallback != null) return;
+        connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        defaultNetwork = null;
+        defaultNetworkCapabilities = null;
+        if (connectivityManager == null) {
+            updateNetworkStatus();
+            return;
         }
-        btnWifi.setText(text);
+        networkStatus.setText(R.string.network_connecting);
+        btnWifi.setContentDescription(getString(R.string.network_status_description,
+                getString(R.string.network_connecting)));
+        networkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(@NonNull Network network) {
+                if (!resumed || networkCallback != this) return;
+                defaultNetwork = network;
+                defaultNetworkCapabilities = null;
+                // Capabilities arrive in their own callback; querying here races network creation.
+                updateNetworkStatus();
+            }
+
+            @Override
+            public void onCapabilitiesChanged(@NonNull Network network, @NonNull NetworkCapabilities capabilities) {
+                if (!resumed || networkCallback != this || !network.equals(defaultNetwork)) return;
+                defaultNetworkCapabilities = capabilities;
+                updateNetworkStatus();
+            }
+
+            @Override
+            public void onLost(@NonNull Network network) {
+                // A late loss from the former default must not clear its replacement.
+                if (!resumed || networkCallback != this || !network.equals(defaultNetwork)) return;
+                defaultNetwork = null;
+                defaultNetworkCapabilities = null;
+                updateNetworkStatus();
+            }
+        };
+        try {
+            connectivityManager.registerDefaultNetworkCallback(networkCallback, handler);
+            // Establish the disconnected state too: no callback is promised when no network exists.
+            Network initial = connectivityManager.getActiveNetwork();
+            defaultNetwork = initial;
+            defaultNetworkCapabilities = initial == null ? null : connectivityManager.getNetworkCapabilities(initial);
+            updateNetworkStatus();
+        } catch (SecurityException | IllegalArgumentException e) {
+            try {
+                connectivityManager.unregisterNetworkCallback(networkCallback);
+            } catch (IllegalArgumentException ignored) {
+                // Registration itself failed.
+            }
+            networkCallback = null;
+            updateNetworkStatus();
+        }
+    }
+
+    private void stopNetworkMonitoring() {
+        if (networkCallback != null && connectivityManager != null) {
+            try {
+                connectivityManager.unregisterNetworkCallback(networkCallback);
+            } catch (IllegalArgumentException ignored) {
+                // Already unregistered after a failed registration.
+            }
+        }
+        networkCallback = null;
+        defaultNetwork = null;
+        defaultNetworkCapabilities = null;
+    }
+
+    private void updateNetworkStatus() {
+        int label;
+        NetworkCapabilities capabilities = defaultNetworkCapabilities;
+        if (defaultNetwork == null) label = R.string.network_disconnected;
+        else if (capabilities == null) label = R.string.network_connecting;
+        else if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)) {
+            label = R.string.network_captive_portal;
+        } else if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+            label = R.string.network_no_internet;
+        } else if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
+            label = R.string.network_connected_ethernet;
+        } else if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+            label = R.string.network_connected_wifi;
+        } else label = R.string.network_connected;
+        String status = getString(label);
+        networkStatus.setText(status);
+        btnWifi.setContentDescription(getString(R.string.network_status_description, status));
+        if (Build.VERSION.SDK_INT >= 30) btnWifi.setStateDescription(status);
+    }
+
+    private void openNetworkSettings() {
+        Intent networkSettings = new Intent(Settings.ACTION_WIRELESS_SETTINGS);
+        if (networkSettings.resolveActivity(getPackageManager()) == null) {
+            networkSettings = new Intent(Settings.ACTION_WIFI_SETTINGS);
+        }
+        open(networkSettings);
     }
 
     private void open(Intent i) {
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             startActivity(i);
-        } catch (ActivityNotFoundException e) {
-            Toast.makeText(this, "Not available on this TV", Toast.LENGTH_SHORT).show();
+        } catch (ActivityNotFoundException | SecurityException e) {
+            Toast.makeText(this, R.string.action_unavailable, Toast.LENGTH_SHORT).show();
         }
     }
 
     /** Dropdown menu under the Inputs pill: HDMI ports (with connection state), AV and Live TV. */
     private void showInputs() {
+        if (inputsPopup != null) inputsPopup.dismiss();
         View anchor = findViewById(R.id.btnInputs);
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
         LinearLayout rows = panel.findViewById(R.id.rows);
 
-        // Compact: as wide as the Inputs pill (a touch wider so "HDMI 1" fits), hanging right below it.
-        int width = Math.max(anchor.getWidth(), (int) (150 * density));
-        final PopupWindow popup = new PopupWindow(panel, width, ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        final PopupWindow popup = new PopupWindow(panel, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, true);
         popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));   // needed for Back to dismiss
         popup.setOutsideTouchable(true);
         popup.setAnimationStyle(0);
         popup.setElevation(0f);
+        popup.setClippingEnabled(true);
+        popup.setOnDismissListener(() -> {
+            if (inputsPopup == popup) inputsPopup = null;
+        });
 
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
         boolean sawNonHdmi = false;
@@ -417,7 +688,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 CharSequence l = info.loadLabel(this);
                 String label = l == null ? info.getId() : l.toString();
                 boolean hdmi = info.getType() == TvInputInfo.TYPE_HDMI;
-                if (hdmi && !label.toUpperCase().contains("HDMI")) label = "HDMI " + label;
+                if (hdmi && !label.toUpperCase(Locale.ROOT).contains("HDMI")) {
+                    label = getString(R.string.input_hdmi_label, label);
+                }
                 final String id = info.getId();
                 int state = tim.getInputState(id);
                 if (!hdmi && rows.getChildCount() > 0 && !sawNonHdmi) addSeparator(rows);
@@ -442,7 +715,34 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         panel.setPivotY(0f);
         panel.setScaleY(0.92f);
         panel.setTranslationY(-8 * density);
-        popup.showAsDropDown(anchor, 0, (int) (10 * density), Gravity.START);
+        Rect visibleBounds = new Rect();
+        root.getWindowVisibleDisplayFrame(visibleBounds);
+        if (visibleBounds.isEmpty()) visibleBounds.set(0, 0, root.getWidth(), root.getHeight());
+        int margin = Math.round(16 * density);
+        int maxWidth = Math.max(1, visibleBounds.width() - 2 * margin);
+        panel.measure(View.MeasureSpec.makeMeasureSpec(maxWidth, View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        int width = Math.min(maxWidth, Math.max(anchor.getWidth(), panel.getMeasuredWidth()));
+        panel.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        int[] anchorLocation = new int[2];
+        anchor.getLocationOnScreen(anchorLocation);
+        int x = Math.max(visibleBounds.left + margin,
+                Math.min(anchorLocation[0], visibleBounds.right - margin - width));
+        int y = anchorLocation[1] + anchor.getHeight() + Math.round(10 * density);
+        int availableBelow = Math.max(1, visibleBounds.bottom - margin - y);
+        int availableAbove = Math.max(1, anchorLocation[1] - margin - visibleBounds.top - Math.round(10 * density));
+        int height;
+        if (availableBelow < Math.round(64 * density) && availableAbove > availableBelow) {
+            height = Math.min(panel.getMeasuredHeight(), availableAbove);
+            y = anchorLocation[1] - Math.round(10 * density) - height;
+        } else {
+            height = Math.min(panel.getMeasuredHeight(), availableBelow);
+        }
+        popup.setWidth(width);
+        popup.setHeight(height);
+        inputsPopup = popup;
+        popup.showAtLocation(root, Gravity.TOP | Gravity.LEFT, x, y);
         panel.animate().alpha(1f).scaleY(1f).translationY(0f).setDuration(220)
                 .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
         rows.getChildAt(0).requestFocus();

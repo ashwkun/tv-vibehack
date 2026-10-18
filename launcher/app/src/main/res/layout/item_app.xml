@@ -34,6 +34,7 @@
 
         <TextView
             android:id="@+id/label"
+            style="@style/TextOutfit.Weight400"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_gravity="bottom"
@@ -45,14 +46,15 @@
             android:ellipsize="end"
             android:textColor="#FFFFFFFF"
             android:textSize="13sp"
-            android:fontFamily="@font/outfit"
             android:visibility="gone" />
     </FrameLayout>
 
     <TextView
         android:id="@+id/name"
+        style="@style/TextOutfit.Weight500"
         android:layout_width="180dp"
-        android:layout_height="22dp"
+        android:layout_height="wrap_content"
+        android:minHeight="22dp"
         android:layout_gravity="center_horizontal|top"
         android:layout_marginTop="108dp"
         android:gravity="center"
@@ -62,7 +64,5 @@
         android:translationY="-6dp"
         android:textColor="#F2FFFFFF"
         android:textSize="14sp"
-        android:fontFamily="@font/outfit"
-        android:fontVariationSettings="'wght' 500"
         android:letterSpacing="0.02" />
 </FrameLayout>

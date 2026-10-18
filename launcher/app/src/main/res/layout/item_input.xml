@@ -1,11 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="42dp"
+    android:layout_height="wrap_content"
+    android:minHeight="58dp"
     android:orientation="horizontal"
     android:gravity="center_vertical"
     android:paddingStart="12dp"
     android:paddingEnd="12dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp"
     android:background="@drawable/input_row_bg"
     android:focusable="true"
     android:clickable="true">
@@ -18,19 +21,38 @@
         android:duplicateParentState="true"
         android:contentDescription="@null" />
 
-    <TextView
-        android:id="@+id/title"
+    <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
         android:layout_marginStart="10dp"
         android:layout_marginEnd="4dp"
-        android:textColor="@drawable/pill_text"
         android:duplicateParentState="true"
-        android:textSize="15sp"
-        android:fontFamily="@font/outfit"
-        android:fontVariationSettings="'wght' 500"
-        android:singleLine="true" />
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/title"
+            style="@style/TextOutfit.Weight500"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="@drawable/pill_text"
+            android:duplicateParentState="true"
+            android:textSize="15sp"
+            android:singleLine="true"
+            android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/status"
+            style="@style/TextOutfit.Weight400"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textColor="@drawable/pill_text_dim"
+            android:duplicateParentState="true"
+            android:textSize="12sp"
+            android:singleLine="true"
+            android:ellipsize="end" />
+    </LinearLayout>
 
     <View
         android:id="@+id/dot"
@@ -39,13 +61,4 @@
         android:layout_marginEnd="8dp"
         android:background="@drawable/status_dot" />
 
-    <TextView
-        android:id="@+id/status"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:textColor="@drawable/pill_text_dim"
-        android:duplicateParentState="true"
-        android:textSize="11sp"
-        android:fontFamily="@font/outfit"
-        android:letterSpacing="0.04" />
 </LinearLayout>

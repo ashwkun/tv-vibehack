@@ -25,6 +25,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat;
 import androidx.recyclerview.widget.RecyclerView;
 
 import java.util.ArrayList;
@@ -74,6 +76,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     /** Never shown as tiles (res/values/config.xml, hidden_apps). */
     private final Set<String> hidden;
     private final List<Entry> items = new ArrayList<>();
+    private final StableItemIds stableIds = new StableItemIds();
 
     AppAdapter(Context ctx, TileListener listener, int dockSize) {
         this.ctx = ctx;
@@ -81,6 +84,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         this.dockSize = dockSize;
         this.favourites = Arrays.asList(ctx.getResources().getStringArray(R.array.dock_apps));
         this.hidden = new HashSet<>(Arrays.asList(ctx.getResources().getStringArray(R.array.hidden_apps)));
+        setHasStableIds(true);
     }
 
     void reload() {
@@ -88,15 +92,18 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         Intent probe = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
         List<ResolveInfo> found = pm.queryIntentActivities(probe, 0);
         List<Entry> fresh = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
         for (ResolveInfo ri : found) {
             if (ri.activityInfo == null) continue;
             String pkg = ri.activityInfo.packageName;
             if (pkg.equals(ctx.getPackageName()) || hidden.contains(pkg)) continue;
+            ComponentName component = new ComponentName(pkg, ri.activityInfo.name);
+            if (!seen.add(component.flattenToString())) continue;
             Drawable banner = ri.activityInfo.loadBanner(pm);
             if (banner == null) banner = ri.activityInfo.applicationInfo.loadBanner(pm);
             Drawable icon = ri.loadIcon(pm);
             String label = String.valueOf(ri.loadLabel(pm));
-            fresh.add(new Entry(label, new ComponentName(pkg, ri.activityInfo.name), banner, icon));
+            fresh.add(new Entry(label, component, banner, icon));
         }
         Collections.sort(fresh, (a, b) -> {
             int fa = favourites.indexOf(a.pkg), fb = favourites.indexOf(b.pkg);
@@ -123,10 +130,20 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     public void onBindViewHolder(@NonNull Holder h, int position) {
         Entry e = items.get(position);
         h.name.setText(e.label);
+        h.card.setContentDescription(e.label);
+        h.banner.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        h.icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        h.label.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        h.name.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         h.name.setVisibility(position < dockSize ? View.INVISIBLE : View.VISIBLE);   // the dock has no labels
-        h.name.setAlpha(0f);
-        h.card.setScaleX(1f);
-        h.card.setScaleY(1f);
+        boolean focused = h.card.hasFocus();
+        h.name.animate().cancel();
+        h.card.animate().cancel();
+        h.name.setAlpha(focused ? 1f : 0f);
+        float density = ctx.getResources().getDisplayMetrics().density;
+        h.name.setTranslationY(density * (focused ? 4f : -6f));
+        h.card.setScaleX(focused ? FOCUS_SCALE : 1f);
+        h.card.setScaleY(focused ? FOCUS_SCALE : 1f);
         if (e.banner != null) {
             h.banner.setImageDrawable(e.banner);
             h.banner.setVisibility(View.VISIBLE);
@@ -146,10 +163,14 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             try {
                 ctx.startActivity(i);
-            } catch (ActivityNotFoundException ignored) {
+            } catch (ActivityNotFoundException | SecurityException ignored) {
+                Toast.makeText(ctx, R.string.action_unavailable, Toast.LENGTH_SHORT).show();
             }
             return true;
         });
+        ViewCompat.replaceAccessibilityAction(h.card,
+                AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_LONG_CLICK,
+                ctx.getString(R.string.app_info), (view, arguments) -> view.performLongClick());
     }
 
     private void launch(Entry e) {
@@ -160,13 +181,31 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         try {
             ctx.startActivity(i);
         } catch (Exception ex) {
-            Toast.makeText(ctx, "Can't open " + e.label, Toast.LENGTH_SHORT).show();
+            Toast.makeText(ctx, ctx.getString(R.string.app_unavailable, e.label), Toast.LENGTH_SHORT).show();
         }
     }
 
     @Override
     public int getItemCount() {
         return items.size();
+    }
+
+    @Override
+    public long getItemId(int position) {
+        return stableIds.idFor(keyAt(position));
+    }
+
+    String keyAt(int position) {
+        return position >= 0 && position < items.size()
+                ? items.get(position).component.flattenToString() : null;
+    }
+
+    int positionOfKey(String key) {
+        if (key == null) return RecyclerView.NO_POSITION;
+        for (int i = 0; i < items.size(); i++) {
+            if (key.equals(keyAt(i))) return i;
+        }
+        return RecyclerView.NO_POSITION;
     }
 
     String labelAt(int position) {

@@ -6,23 +6,33 @@
         <item name="android:windowAnimationStyle">@null</item>
     </style>
 
-    <!-- Frosted pill, tvOS style. -->
-    <style name="TopButton">
+    <style name="TextOutfit">
+        <item name="android:fontFamily">@font/outfit</item>
+    </style>
+    <style name="TextOutfit.Weight300" parent="TextOutfit" />
+    <style name="TextOutfit.Weight400" parent="TextOutfit" />
+    <style name="TextOutfit.Weight500" parent="TextOutfit" />
+
+    <!-- Variable-font weights are applied only on Android 9 and later. -->
+    <style name="TopButton" parent="TextOutfit.Weight500">
         <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">42dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minHeight">42dp</item>
         <item name="android:layout_marginStart">10dp</item>
         <item name="android:paddingStart">16dp</item>
         <item name="android:paddingEnd">20dp</item>
+        <item name="android:paddingTop">8dp</item>
+        <item name="android:paddingBottom">8dp</item>
         <item name="android:gravity">center</item>
         <item name="android:background">@drawable/pill_bg</item>
         <item name="android:textColor">@drawable/pill_text</item>
         <item name="android:textSize">15sp</item>
-        <item name="android:fontFamily">@font/outfit</item>
-        <item name="android:fontVariationSettings">\'wght\' 500</item>
         <item name="android:letterSpacing">0.01</item>
         <item name="android:drawablePadding">9dp</item>
         <item name="android:drawableTint">@drawable/pill_text</item>
         <item name="android:focusable">true</item>
         <item name="android:clickable">true</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:ellipsize">end</item>
     </style>
 </resources>
