@@ -74,9 +74,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
     static int COLUMNS = 4;
     private static final long MINUTE_MS = 60_000L;
     private static final int WIFI_NAME_PERMISSION_REQUEST = 42;
-    private static final int NETWORK_CONNECTED_COLOR = 0xFF22C55E;
-    private static final int NETWORK_PENDING_COLOR = 0xFFFBBF24;
-    private static final int NETWORK_OFFLINE_COLOR = 0xFF9CA3AF;
+    private static final int NETWORK_CONNECTED_COLOR = 0xFFAEBFC9;
+    private static final int NETWORK_PENDING_COLOR = 0xFFC8B58B;
+    private static final int NETWORK_OFFLINE_COLOR = 0xFF777B83;
     private String liveTvPkg;
 
     private AppAdapter adapter;
@@ -167,7 +167,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
         appOptionsHint = findViewById(R.id.appOptionsHint);
         networkIndicator = new StatusDot();
         networkIndicator.setShape(GradientDrawable.OVAL);
-        int indicatorSize = Math.round(7 * density);
+        int indicatorSize = Math.round(5 * density);
         networkIndicator.setBounds(0, 0, indicatorSize, indicatorSize);
         btnWifi.setCompoundDrawableTintList(getResources().getColorStateList(R.color.pill_text, getTheme()));
         setNetworkPill(getString(R.string.network_pill_checking), 0, NETWORK_PENDING_COLOR);

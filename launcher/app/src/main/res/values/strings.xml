@@ -22,8 +22,8 @@
     <string name="offline">Offline</string>
     <string name="action_unavailable">This action isn’t available on this TV.</string>
     <string name="app_unavailable">Can’t open %1$s. Open App info to check the app.</string>
-    <!-- Date pattern consumed by TextClock. Keep the weekday, day, and month. -->
-    <string name="date_format">EEEE d MMMM</string>
+    <!-- Date pattern consumed by the date line beneath the clock. -->
+    <string name="date_format">EEEE, d MMMM</string>
     <string name="network_connected_wifi">Wi-Fi connected</string>
     <string name="network_connected_ethernet">Ethernet connected</string>
     <string name="network_connected">Connected</string>
