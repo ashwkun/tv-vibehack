@@ -32,6 +32,7 @@ import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.animation.AnimationUtils;
@@ -111,6 +112,43 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
     private int focusGeneration;
     private int heroGeneration;
     private RecyclerView.OnScrollListener pendingFocusListener;
+    private String pendingFocusKey;
+    private String returnFocusKey;
+    private String gridConfirmTargetKey;
+    private int gridConfirmKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+    private int ignoredConfirmKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+    private boolean gridConfirmLongPressed;
+    private final KeyEvent.DispatcherState gridConfirmState = new KeyEvent.DispatcherState();
+    private final KeyEvent.Callback gridConfirmCallback = new KeyEvent.Callback() {
+        @Override
+        public boolean onKeyDown(int keyCode, KeyEvent event) {
+            if (event.getRepeatCount() == 0) event.startTracking();
+            return true;
+        }
+
+        @Override
+        public boolean onKeyLongPress(int keyCode, KeyEvent event) {
+            if (!gridConfirmLongPressed) {
+                gridConfirmLongPressed = true;
+                performGridConfirm(gridConfirmTargetKey, true);
+            }
+            return true;
+        }
+
+        @Override
+        public boolean onKeyUp(int keyCode, KeyEvent event) {
+            String key = gridConfirmTargetKey;
+            boolean click = !event.isCanceled() && !gridConfirmLongPressed;
+            cancelGridConfirm();
+            if (click) performGridConfirm(key, false);
+            return true;
+        }
+
+        @Override
+        public boolean onKeyMultiple(int keyCode, int count, KeyEvent event) {
+            return true;
+        }
+    };
     private PopupWindow inputsPopup;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
@@ -252,7 +290,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
             boolean onTile = newF != null && newF.getId() == R.id.card;
             if (!onTile) {
                 hideGlass();
-                if (newF != null) cancelPendingFocus();
+                // Recycling can temporarily move physical focus onto a header button too.
+                // Keep the logical request; intentional header/touch transitions cancel it explicitly.
             }
         });
     }
@@ -278,6 +317,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
     protected void onPause() {
         super.onPause();
         resumed = false;
+        cancelGridConfirm();
         refreshGeneration++;
         restoringFocus = false;
         cancelPendingFocus();
@@ -297,7 +337,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
     @Override
     public void onBackPressed() {
         if (adapter.isMoving()) onMoveFinished(false);
-        else if (appsExpanded) focusDock();
+        else if (appsExpanded || adapter.positionOfKey(pendingFocusKey) >= COLUMNS) focusDock();
     }
 
     private void registerPackageReceiver() {
@@ -318,9 +358,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
     private void refreshApps(boolean animateEntrance) {
         appMenu.dismiss();
         View focused = getCurrentFocus();
-        boolean restoreTile = focused == null || focused.getId() == R.id.card;
-        String selectedKey = lastFocusedKey;
-        if (!restoringFocus && focused != null && focused.getId() == R.id.card) {
+        boolean restoreTile = returnFocusKey != null || pendingFocusKey != null || focused == null
+                || focused == grid || focused.getId() == R.id.card;
+        String selectedKey = returnFocusKey != null ? returnFocusKey
+                : pendingFocusKey != null ? pendingFocusKey : lastFocusedKey;
+        if (returnFocusKey == null && pendingFocusKey == null && !restoringFocus
+                && focused != null && focused.getId() == R.id.card) {
             RecyclerView.ViewHolder holder = grid.findContainingViewHolder(focused);
             if (holder != null) {
                 String key = adapter.keyAt(holder.getBindingAdapterPosition());
@@ -328,6 +371,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
             }
         }
         final String keyToRestore = selectedKey;
+        returnFocusKey = null;
         final int generation = ++refreshGeneration;
         cancelPendingFocus();
         restoringFocus = true;
@@ -349,8 +393,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
     @Override
     public void onTileFocused(int position, View card) {
         if (restoringFocus) return;
-        lastFocused = position;
         String key = adapter.keyAt(position);
+        // RecyclerView can temporarily focus an intermediate card while approaching our target.
+        // It must not replace logical history or start a competing scroll.
+        if (pendingFocusKey != null && !pendingFocusKey.equals(key)) return;
+        returnFocusKey = null; // Physical focus has caught up, so no launch-return override is needed.
+        lastFocused = position;
         if (key != null) {
             SharedPreferences.Editor editor = null;
             if (!key.equals(lastFocusedKey)) {
@@ -497,6 +545,118 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
     // ---- navigation ------------------------------------------------------------------------------
 
     @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        int code = event.getKeyCode();
+        if (code == KeyEvent.KEYCODE_TAB && event.getAction() == KeyEvent.ACTION_DOWN) {
+            cancelGridConfirm();
+            if (pendingFocusKey != null) {
+                cancelPendingFocus();
+                grid.stopScroll();
+            }
+            return super.dispatchKeyEvent(event);
+        }
+        boolean confirm = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER
+                || code == KeyEvent.KEYCODE_NUMPAD_ENTER;
+        if (confirm) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                ignoredConfirmKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+            } else if (ignoredConfirmKeyCode == code) {
+                if (event.getAction() == KeyEvent.ACTION_UP) ignoredConfirmKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+                return true;
+            }
+            if (event.isCanceled() && ((gridConfirmTargetKey != null && gridConfirmKeyCode == code) || isGridKeyContext())) {
+                cancelGridConfirm();
+                return true;
+            }
+            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0 && isGridKeyContext()) {
+                cancelGridConfirm();
+                ignoredConfirmKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+                int position = logicalGridPosition();
+                if (position >= 0) {
+                    gridConfirmTargetKey = adapter.keyAt(position);
+                    gridConfirmKeyCode = code;
+                }
+            }
+            if (gridConfirmTargetKey != null && gridConfirmKeyCode == code) {
+                // Dispatch directly to a separate callback, never back through Activity or the card.
+                return event.dispatch(gridConfirmCallback, gridConfirmState, this);
+            }
+        }
+        boolean arrow = code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN
+                || code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT;
+        if (arrow && isGridKeyContext()) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                cancelGridConfirm();
+                int position = logicalGridPosition();
+                if (position >= 0 && !onTileKey(position, code)) focusHeaderFromDock(position);
+            }
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            cancelGridConfirm();
+            if (grid != null) {
+                cancelPendingFocus();
+                grid.stopScroll();
+            }
+        }
+        return super.dispatchTouchEvent(event);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (!hasFocus) cancelGridConfirm();
+    }
+
+    private boolean isGridKeyContext() {
+        if (!resumed || grid == null || !hasWindowFocus()) return false;
+        View focused = getCurrentFocus();
+        return pendingFocusKey != null || focused == grid
+                || (focused != null && grid.findContainingViewHolder(focused) != null);
+    }
+
+    private int logicalGridPosition() {
+        int position = adapter.positionOfKey(pendingFocusKey);
+        if (position != RecyclerView.NO_POSITION) return position;
+        View focused = getCurrentFocus();
+        RecyclerView.ViewHolder holder = focused == null ? null : grid.findContainingViewHolder(focused);
+        if (holder != null && holder.getBindingAdapterPosition() != RecyclerView.NO_POSITION) {
+            return adapter.nearestFocusablePosition(holder.getBindingAdapterPosition());
+        }
+        position = adapter.positionOfKey(lastFocusedKey);
+        return position != RecyclerView.NO_POSITION ? position : adapter.nearestFocusablePosition(lastFocused);
+    }
+
+    private void performGridConfirm(String key, boolean longPress) {
+        int position = adapter.positionOfKey(key);
+        if (position == RecyclerView.NO_POSITION) return; // Never retarget an app removed during the gesture.
+        AppAdapter.Entry entry = adapter.entryAt(position);
+        if (!longPress && !adapter.isMoving() && entry != null
+                && (entry.kind == AppAdapter.Entry.APP || entry.kind == AppAdapter.Entry.RECENT)) {
+            returnFocusKey = key;
+            lastFocusedKey = key;
+            lastFocused = position;
+            preferences.edit().putString("focused_component", key).apply();
+        }
+        focusTile(position);
+        if (longPress) onTileLongPressed(position);
+        else onTileClicked(position);
+    }
+
+    private void cancelGridConfirm() {
+        if (gridConfirmTargetKey != null) ignoredConfirmKeyCode = gridConfirmKeyCode;
+        gridConfirmState.reset();
+        gridConfirmTargetKey = null;
+        gridConfirmKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+        gridConfirmLongPressed = false;
+    }
+
+    @Override
     public boolean onTileKey(int position, int keyCode) {
         int homeCount = adapter.homeItemCount();
         if (adapter.isMoving()) {
@@ -516,6 +676,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
             }
             return true;
         }
+        // The physical card can keep focus until a smooth scroll completes. Advance from the
+        // latest requested card so quick D-pad presses accumulate instead of repeating one step.
+        int requestedPosition = adapter.positionOfKey(pendingFocusKey);
+        if (requestedPosition != RecyclerView.NO_POSITION) position = requestedPosition;
         if (adapter.isLibraryPosition(position) && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
             int previous = adapter.positionOfKey(lastGridKey);
             if (previous >= COLUMNS && !adapter.isLibraryPosition(previous)) {
@@ -526,7 +690,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
         int target;
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
             target = adapter.verticalTarget(position, -1);
-            if (target < 0) return false;
+            if (target < 0) {
+                if (pendingFocusKey != null) {
+                    focusHeaderFromDock(position);
+                    return true;
+                }
+                return false;
+            }
         } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
             target = adapter.verticalTarget(position, 1);
         } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
@@ -534,7 +704,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
         } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
             target = adapter.horizontalTarget(position, 1);
         } else return false;
-        if (target != position) focusTile(target);
+        if (target != position) {
+            if (adapter.isLibraryPosition(target)) lastGridKey = adapter.keyAt(position);
+            focusTile(target);
+        }
         return true;
     }
 
@@ -592,12 +765,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
         final int pos = adapter.nearestFocusablePosition(Math.max(0, Math.min(position, adapter.getItemCount() - 1)));
         final String key = adapter.keyAt(pos);
         final int generation = focusGeneration;
-        RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(pos);
-        if (vh != null) {
-            focusCard(vh.itemView.findViewById(R.id.card), pos);
-            return;
-        }
-        // Not laid out yet: scroll there, then focus once the scroll settles.
+        pendingFocusKey = key;
         pendingFocusListener = new RecyclerView.OnScrollListener() {
             @Override
             public void onScrollStateChanged(@NonNull RecyclerView rv, int newState) {
@@ -606,6 +774,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
             }
         };
         grid.addOnScrollListener(pendingFocusListener);
+        RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(pos);
+        if (vh != null && focusCard(vh.itemView.findViewById(R.id.card), pos)) {
+            if (generation == focusGeneration && grid.getScrollState() == RecyclerView.SCROLL_STATE_IDLE) {
+                cancelPendingFocus();
+            }
+            return;
+        }
+        // Not laid out yet: scroll there, then focus once the scroll settles.
         grid.smoothScrollToPosition(pos);
         // Handles a target laid out without entering a scrolling state.
         grid.post(() -> {
@@ -622,19 +798,24 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
         }
         RecyclerView.ViewHolder holder = grid.findViewHolderForAdapterPosition(position);
         if (holder == null) return;
-        cancelPendingFocus();
-        focusCard(holder.itemView.findViewById(R.id.card), position);
+        if (!focusCard(holder.itemView.findViewById(R.id.card), position)) return;
+        if (generation == focusGeneration && grid.getScrollState() == RecyclerView.SCROLL_STATE_IDLE) {
+            cancelPendingFocus();
+        }
     }
 
-    private void focusCard(View card, int position) {
+    private boolean focusCard(View card, int position) {
+        if (card == null) return false;
         boolean alreadyFocused = card.hasFocus();
         boolean focused = card.requestFocus();
         if (!focused) focused = card.requestFocusFromTouch();
         if (focused && alreadyFocused) onTileFocused(position, card);
+        return focused;
     }
 
     private void cancelPendingFocus() {
         focusGeneration++;
+        pendingFocusKey = null;
         if (pendingFocusListener != null) {
             grid.removeOnScrollListener(pendingFocusListener);
             pendingFocusListener = null;
@@ -644,6 +825,31 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
     private void focusDock() {
         int position = adapter.positionOfKey(lastDockKey);
         focusTile(position >= 0 && position < COLUMNS ? position : 0);
+    }
+
+    private void focusHeaderFromDock(int position) {
+        String key = adapter.keyAt(position);
+        cancelPendingFocus();
+        grid.stopScroll();
+        if (key != null) {
+            lastFocused = position;
+            lastFocusedKey = key;
+            lastDockKey = key;
+            preferences.edit().putString("focused_component", key).putString("dock_component", key).apply();
+        }
+        Rect bounds = new Rect(0, 0, grid.getWidth(), grid.getHeight());
+        root.offsetDescendantRectToMyCoords(grid, bounds);
+        float dockCenter = bounds.left + grid.getWidth() * (position + 0.5f) / COLUMNS;
+        View closest = findViewById(R.id.btnInputs);
+        float distance = Float.MAX_VALUE;
+        for (int id : new int[]{R.id.btnInputs, R.id.btnWifi, R.id.btnSettings}) {
+            View control = findViewById(id);
+            bounds.set(0, 0, control.getWidth(), control.getHeight());
+            root.offsetDescendantRectToMyCoords(control, bounds);
+            float candidate = Math.abs(bounds.exactCenterX() - dockCenter);
+            if (candidate < distance) { closest = control; distance = candidate; }
+        }
+        if (!closest.requestFocus()) closest.requestFocusFromTouch();
     }
 
     private void updateMoveInstructions() {
@@ -819,9 +1025,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
     }
 
     private String readWifiName(NetworkCapabilities capabilities) {
-        if (!hasWifiNamePermission() || !isLocationModeEnabled()) return null;
+        if (!hasWifiNamePermission()) return null;
         try {
-            if (Build.VERSION.SDK_INT >= 29 && capabilities.getTransportInfo() instanceof WifiInfo) {
+            if (Build.VERSION.SDK_INT >= 29 && capabilities != null && capabilities.getTransportInfo() instanceof WifiInfo) {
                 String name = cleanWifiName(((WifiInfo) capabilities.getTransportInfo()).getSSID());
                 if (name != null) return name;
             }
@@ -847,6 +1053,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, A
         if (!hasWifiNamePermission()) {
             appMenu.showWifiNamePermission(() -> requestPermissions(new String[]{Manifest.permission.ACCESS_COARSE_LOCATION,
                     Manifest.permission.ACCESS_FINE_LOCATION}, WIFI_NAME_PERMISSION_REQUEST));
+        } else if (readWifiName(defaultNetworkCapabilities) != null) {
+            updateNetworkStatus();
         } else if (!isLocationModeEnabled()) {
             appMenu.showLocationRequirement(() -> {
                 Intent locationSettings = new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS);
