@@ -34,6 +34,12 @@ hidden and Location is off. It does not prompt at startup or turn on Location it
 the current Wi-Fi connection, without Wi-Fi scans, coordinate lookup or polling. Denying permission
 leaves the network shortcut usable. The installer grants no runtime permissions.
 
+Google TV may also show a native **Google Location Accuracy** consent screen when enabling Location.
+That separate system service can process wireless-signal and sensor data to improve location accuracy.
+Review and choose on Google's screen; the launcher and installer do not accept it automatically.
+On the tested network-only TV, explicit native acceptance kept Location enabled and allowed the
+actual Wi-Fi name to appear.
+
 Phase 2 adds remote dock editing and an installed-app library, adapted from upstream
 [PR #19](https://github.com/Gathin23/tv-vibehack/pull/19), with separate identities for apps, empty slots,
 unavailable pins and the library entry. Build/model checks and hardware validation are recorded

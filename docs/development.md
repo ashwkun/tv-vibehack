@@ -113,6 +113,17 @@ permission; the location permissions are runtime permissions, separate from the 
 permission. The app still declares no Internet permission, and build/install tooling grants no runtime
 permissions automatically.
 
+Master Location and the launcher's runtime permission control access to the protected Wi-Fi name.
+Google Location Accuracy is a separate system-service choice. When GMS supplies network location,
+this setting is also required for that provider, and can process wireless-signal and sensor data to
+improve location accuracy. See
+[Google's description](https://support.google.com/android/answer/15157297) and the
+[`SettingsClient` reference](https://developers.google.com/android/reference/com/google/android/gms/location/SettingsClient).
+On the tested network-only TV, enabling Location opens GMS's
+`com.google.android.location.network.NetworkConsentActivity`. Resolving that native consent through
+explicit acceptance kept master Location enabled. The user chooses on the native Google screen;
+the launcher and build/install scripts do not accept accuracy consent or enable scanning automatically.
+
 ## Deferred work
 
 Screensavers, Fire TV support and tuner-specific input changes remain separate work. Phase 1 targets
@@ -167,11 +178,14 @@ Build 10 (`2.3.4`) also established the following device behavior before the dis
 - Inputs fitted all HDMI, AV and Live TV rows in a measured 220dp-wide popup and dismissed with Back.
   The network shortcut opened native Network & Internet settings and returned through Home.
 
-The network pill displays the Wi-Fi fallback with validated connection status and an accessible
-"Network. Wi-Fi connected" description. Display of the actual SSID remains unverified: system
-Location repeatedly turns off shortly after enabling it. A controlled reproduction observed that
-reset before Home started, while the launcher was force-stopped; the reset's owner has not been
-identified. Other network states have source review, rather than end-to-end hardware replay. Casting,
+Follow-up diagnosis observed an unresolved GMS `NetworkConsentActivity` during Location enablement.
+After the user explicitly approved and accepted Google Location Accuracy, the same installed build
+12 (`2.3.6`) displayed the actual Wi-Fi name with an accessible connected status. Location stayed on
+through Home and a 30-second wait, a force-stop/Home cold launcher restart, and a verified native
+Network settings roundtrip. Explicit native acceptance resolved the observed return to Location off;
+no launcher source change or rebuild was needed. A full TV reboot has not been tested.
+
+Other network states have source review, rather than end-to-end hardware replay. Casting,
 voice, account setup, pairing a replacement remote, factory reset and OTA installation remain untested
 end to end.
 
